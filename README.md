@@ -35,6 +35,8 @@ The `firmware/` directory contains a starter Arduino sketch
 1. Connects to a Wi‑Fi network.
 2. Configures the camera, microphone and I2S amplifier.
 3. Demonstrates audio playback by generating a simple test tone via I2S.
+4. Provides a loopback test routing microphone input directly to the speaker.
+
 
 Further development should add routines to record microphone audio, capture
 images and POST them to the server for processing. When a response is received,
