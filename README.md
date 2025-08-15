@@ -37,6 +37,7 @@ The `firmware/` directory contains a starter Arduino sketch
 3. Demonstrates audio playback by generating a simple test tone via I2S.
 4. Provides a loopback test routing microphone input directly to the speaker.
 
+
 Further development should add routines to record microphone audio, capture
 images and POST them to the server for processing. When a response is received,
 stream the returned audio to the MAX98357A using the same I2S interface.
