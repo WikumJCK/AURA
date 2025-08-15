@@ -5,8 +5,8 @@
 
 
 // Wi-Fi credentials
-const char *ssid = "YOUR_WIFI_SSID";       // TODO: set your network SSID
-const char *password = "YOUR_WIFI_PASSWORD"; // TODO: set your network password
+const char *ssid = "WikumIphone";       // TODO: set your network SSID
+const char *password = "wikum1234"; // TODO: set your network password
 
 // I2S pin configuration for MAX98357A
 #define I2S_DOUT 1   // TODO: set to the pin used for data out
