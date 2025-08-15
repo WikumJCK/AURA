@@ -3,6 +3,7 @@
 #include <esp_camera.h>
 #include <driver/i2s.h>
 
+
 // Wi-Fi credentials
 const char *ssid = "YOUR_WIFI_SSID";       // TODO: set your network SSID
 const char *password = "YOUR_WIFI_PASSWORD"; // TODO: set your network password
@@ -11,6 +12,7 @@ const char *password = "YOUR_WIFI_PASSWORD"; // TODO: set your network password
 #define I2S_DOUT 1   // TODO: set to the pin used for data out
 #define I2S_BCLK 2   // TODO: set to bit clock pin
 #define I2S_LRCK 0   // TODO: set to left/right clock pin
+
 
 void connectWiFi() {
   WiFi.begin(ssid, password);
@@ -43,6 +45,7 @@ void setupMicrophone() {
 }
 
 void setupSpeaker() {
+
   // Configure I2S for speaker output
   i2s_config_t cfg = {
       .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
@@ -67,6 +70,7 @@ void setupSpeaker() {
 
   i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL);
   i2s_set_pin(I2S_NUM_0, &pins);
+
 }
 
 void setup() {
@@ -83,6 +87,7 @@ void loop() {
   static bool played = false;
   if (!played && WiFi.status() == WL_CONNECTED) {
     playTestTone();
+
     played = true;
   }
   delay(100);
@@ -100,3 +105,4 @@ void playTestTone() {
     i2s_write(I2S_NUM_0, &sample, sizeof(sample), &written, portMAX_DELAY);
   }
 }
+
