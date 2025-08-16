@@ -8,9 +8,10 @@
 
 // ===========================
 // Enter your WiFi credentials
+// Replace with your network SSID and password before uploading
 // ===========================
-const char *ssid = "WikumIphone";
-const char *password = "wikum1234";
+const char *ssid = "YOUR_WIFI_SSID";
+const char *password = "YOUR_WIFI_PASSWORD";
 
 void startCameraServer();
 void setupLedFlash();
