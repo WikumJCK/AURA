@@ -1,108 +1,124 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_camera.h>
-#include <driver/i2s.h>
+#include "board_config.h"   // selects CAMERA_MODEL_XIAO_ESP32S3 and pulls in camera_pins.h
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Wi‑Fi: set your network and the STATIC IP you want this device to use
+// ─────────────────────────────────────────────────────────────────────────────
+const char* WIFI_SSID     = "JCK-WiFi";     // ← change
+const char* WIFI_PASSWORD = "12i405b3";    // ← change
 
-// Wi-Fi credentials
-const char *ssid = "YOUR_WIFI_SSID";       // TODO: set your network SSID
-const char *password = "YOUR_WIFI_PASSWORD"; // TODO: set your network password
+IPAddress LOCAL_IP(192,168,8,80);            // ← change to the exact local IP you want
+IPAddress GATEWAY (192,168,8,1);             // ← change to your router IP
+IPAddress SUBNET  (255,255,255,0);
+IPAddress DNS1    (8,8,8,8);                 // optional
+IPAddress DNS2    (1,1,1,1);                 // optional
 
-// I2S pin configuration for MAX98357A
-#define I2S_DOUT 1   // TODO: set to the pin used for data out
-#define I2S_BCLK 2   // TODO: set to bit clock pin
-#define I2S_LRCK 0   // TODO: set to left/right clock pin
+// Provided by app_httpd.cpp in this sketch folder
+void startCameraServer();
 
+static bool initCamera()
+{
+  // camera_pins.h supplies the correct pin numbers for CAMERA_MODEL_XIAO_ESP32S3
+  camera_config_t config = {};
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer   = LEDC_TIMER_0;
 
-void connectWiFi() {
-  WiFi.begin(ssid, password);
+  config.pin_d0 = Y2_GPIO_NUM;   // data lines
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+
+  config.pin_xclk   = XCLK_GPIO_NUM;
+  config.pin_pclk   = PCLK_GPIO_NUM;
+  config.pin_vsync  = VSYNC_GPIO_NUM;
+  config.pin_href   = HREF_GPIO_NUM;
+  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  config.pin_sscb_scl = SIOC_GPIO_NUM;
+
+  config.pin_pwdn  = PWDN_GPIO_NUM;   // some boards use -1
+  config.pin_reset = RESET_GPIO_NUM;  // some boards use -1
+
+  config.xclk_freq_hz = 20000000;     // 20 MHz
+  config.pixel_format = PIXFORMAT_JPEG;
+
+  // If PSRAM exists, use two frame buffers in PSRAM
+  if (psramFound()) {
+    config.frame_size   = FRAMESIZE_SVGA;     // 640x480 — change as you like
+    config.jpeg_quality = 10;                // lower = better quality
+    config.fb_count     = 2;
+    config.fb_location  = CAMERA_FB_IN_PSRAM;
+    config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
+  } else {
+    config.frame_size   = FRAMESIZE_SVGA;    // 320x240 for no-PSRAM
+    config.jpeg_quality = 12;
+    config.fb_count     = 1;
+    config.fb_location  = CAMERA_FB_IN_DRAM;
+  }
+
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    Serial.printf("[CAM] init failed: 0x%x\n", err);
+    return false;
+  }
+
+  // Optional: tweak sensor defaults
+  sensor_t* s = esp_camera_sensor_get();
+  if (s) {
+    s->set_brightness(s, 0);
+    s->set_saturation(s, 0);
+  }
+  return true;
+}
+
+static void connectWiFi()
+{
+  WiFi.mode(WIFI_STA);
+  // set static IP (comment this if you want DHCP)
+  if (!WiFi.config(LOCAL_IP, GATEWAY, SUBNET, DNS1, DNS2)) {
+    Serial.println("[WIFI] Failed to apply static IP config");
+  }
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
+  uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    delay(300);
+    Serial.print(".");
+    if (millis() - start > 20000) {
+      Serial.println("\n[WIFI] Timeout — rebooting");
+      ESP.restart();
+    }
   }
+  Serial.printf("\n[WIFI] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
 }
 
-void setupCamera() {
-  camera_config_t config; // TODO: populate with XIAO ESP32-S3 camera pins
-  // initialize camera using esp_camera_init(&config);
-}
-
-void setupMicrophone() {
-  // Configure I2S for PDM microphone input
-  i2s_config_t cfg = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-      .sample_rate = 16000,
-      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = I2S_COMM_FORMAT_I2S,
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = 8,
-      .dma_buf_len = 64,
-      .use_apll = false,
-      .tx_desc_auto_clear = false,
-      .fixed_mclk = 0
-  };
-  // TODO: configure microphone pins and install driver
-}
-
-void setupSpeaker() {
-
-  // Configure I2S for speaker output
-  i2s_config_t cfg = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-      .sample_rate = 16000,
-      .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-      .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-      .communication_format = I2S_COMM_FORMAT_I2S,
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-      .dma_buf_count = 8,
-      .dma_buf_len = 64,
-      .use_apll = false,
-      .tx_desc_auto_clear = true,
-      .fixed_mclk = 0
-  };
-
-  i2s_pin_config_t pins = {
-      .bck_io_num = I2S_BCLK,
-      .ws_io_num = I2S_LRCK,
-      .data_out_num = I2S_DOUT,
-      .data_in_num = I2S_PIN_NO_CHANGE
-  };
-
-  i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL);
-  i2s_set_pin(I2S_NUM_0, &pins);
-
-}
-
-void setup() {
+void setup()
+{
   Serial.begin(115200);
+  delay(200);
+  Serial.println("AURA CamServer — static IP");
+
+  if (!initCamera()) {
+    Serial.println("Camera init failed — halt");
+    while (true) delay(1000);
+  }
+
   connectWiFi();
-  setupCamera();
-  setupMicrophone();
-  setupSpeaker();
+
+  startCameraServer();
+
+  Serial.println("\n===== URLs =====");
+  Serial.printf("UI      : http://%s/\n", WiFi.localIP().toString().c_str());
+  Serial.printf("Stream  : http://%s/stream\n", WiFi.localIP().toString().c_str());
+  Serial.printf("Capture : http://%s/capture\n", WiFi.localIP().toString().c_str());
 }
 
-void loop() {
-  // TODO: capture audio, capture image, send to server, receive audio response
-  // Example placeholder: play test tone once connected
-  static bool played = false;
-  if (!played && WiFi.status() == WL_CONNECTED) {
-    playTestTone();
-
-    played = true;
-  }
-  delay(100);
+void loop()
+{
+  delay(1000);
 }
-
-void playTestTone() {
-  const int sampleRate = 16000;
-  const int frequency = 440; // A4
-  const int durationMs = 500;
-  const int samples = sampleRate * durationMs / 1000;
-  for (int i = 0; i < samples; ++i) {
-    float theta = 2.0f * PI * frequency * i / sampleRate;
-    int16_t sample = (int16_t)(sin(theta) * 32767);
-    size_t written;
-    i2s_write(I2S_NUM_0, &sample, sizeof(sample), &written, portMAX_DELAY);
-  }
-}
-
