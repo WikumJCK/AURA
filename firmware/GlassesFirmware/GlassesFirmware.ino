@@ -3,6 +3,7 @@
 #include <esp_camera.h>
 #include "board_config.h"   // selects CAMERA_MODEL_XIAO_ESP32S3 and pulls in camera_pins.h
 
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Wi‑Fi: set your network and the STATIC IP you want this device to use
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,8 +16,17 @@ IPAddress SUBNET  (255,255,255,0);
 IPAddress DNS1    (8,8,8,8);                 // optional
 IPAddress DNS2    (1,1,1,1);                 // optional
 
+// Touch pads as digital inputs (adjust if your pads are active-low)
+// XIAO ESP32-S3 typical D5 = GPIO5, D6 = GPIO6 (confirm your mapping!)
+#define PAD_D5 5   // D5 -> GPIO5  (confirm!)
+#define PAD_D6 6   // D6 -> GPIO6  (confirm!)
+
 // Provided by app_httpd.cpp in this sketch folder
+extern "C" int aura_read_pad_d5_raw() { return digitalRead(PAD_D5); }
+extern "C" int aura_read_pad_d6_raw() { return digitalRead(PAD_D6); }
+
 void startCameraServer();
+
 
 static bool initCamera()
 {
@@ -102,6 +112,8 @@ void setup()
   Serial.begin(115200);
   delay(200);
   Serial.println("AURA CamServer — static IP");
+  pinMode(PAD_D5, INPUT_PULLUP);
+  pinMode(PAD_D6, INPUT_PULLUP);
 
   if (!initCamera()) {
     Serial.println("Camera init failed — halt");

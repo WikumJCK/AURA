@@ -25,6 +25,36 @@
 #include "esp32-hal-log.h"
 #endif
 
+
+
+
+extern "C" {
+  int aura_read_pad_d5_raw();
+  int aura_read_pad_d6_raw();
+}
+
+static esp_err_t pad_status_handler(httpd_req_t *req)
+{
+    int d5_raw = aura_read_pad_d5_raw();  // 0 or 1
+    int d6_raw = aura_read_pad_d6_raw();
+
+    // Normalize to 1=pressed, 0=not pressed
+    // If you used INPUT_PULLUP (pressed pulls to GND), pressed == 0:
+    int d5 = (d5_raw == 0) ? 1 : 0;
+    int d6 = (d6_raw == 0) ? 1 : 0;
+
+    // If your pads are active-HIGH, flip those two lines to:
+    // int d5 = (d5_raw == 1) ? 1 : 0;
+    // int d6 = (d6_raw == 1) ? 1 : 0;
+
+    char resp[64];
+    int n = snprintf(resp, sizeof(resp), "{\"d5\":%d,\"d6\":%d}\n", d5, d6);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, n);
+    return ESP_OK;
+}
+
+
 // LED FLASH setup
 #if defined(LED_GPIO_NUM)
 #define CONFIG_LED_MAX_INTENSITY 255
@@ -813,6 +843,15 @@ void startCameraServer() {
     .supported_subprotocol = NULL
 #endif
   };
+
+  httpd_uri_t pad_uri = {
+  .uri     = "/pad",
+  .method  = HTTP_GET,
+  .handler = pad_status_handler,
+  .user_ctx= NULL
+};
+httpd_register_uri_handler(camera_httpd, &pad_uri);
+
 
   ra_filter_init(&ra_filter, 20);
 
