@@ -34,4 +34,10 @@ uint32_t audio_dropped_bytes();      // ring overflow counter (SD too slow)
 const uint8_t *audio_ram_clip();
 size_t audio_ram_clip_len();
 
+// Rolling retention window (last g_cfg.win_sec seconds, always listening).
+// Buffer size is applied at boot; save dumps it to /rec/win_<ts>.wav.
+bool audio_window_ready();
+float audio_window_sec();  // seconds currently held
+bool audio_window_save(char *out_path, size_t out_len);
+
 #endif  // AURA_AUDIO_H

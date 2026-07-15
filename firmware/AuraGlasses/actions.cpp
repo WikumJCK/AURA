@@ -169,6 +169,24 @@ static void do_toggle_clip() {
   }
 }
 
+static void do_save_audio_window() {
+  if (!audio_window_ready()) {
+    tone_error();
+    event_push("audio_win", false, "window disabled (win_sec=0 or no PSRAM)");
+    return;
+  }
+  char path[64] = "";
+  if (audio_window_save(path, sizeof(path))) {
+    tone_success();
+    char detail[96];
+    snprintf(detail, sizeof(detail), "%s (%.0fs)", path, (double)audio_window_sec());
+    event_push("audio_win", true, detail);
+  } else {
+    tone_error();
+    event_push("audio_win", false, sd_ok() ? "save failed" : "no SD card");
+  }
+}
+
 // Placeholders — replaced by the Gemini (Phase 4) and video/window
 // (Phases 2-3) implementations.
 static void do_stub(const char *name) {
@@ -190,7 +208,7 @@ static void worker_task(void *arg) {
       case ACT_READ_TEXT:      do_stub("read_text"); break;
       case ACT_SPEAK_STATUS:   do_stub("status"); break;
       case ACT_SAVE_VIDEO:     do_stub("video_save"); break;
-      case ACT_SAVE_AUDIO_WIN: do_stub("audio_win"); break;
+      case ACT_SAVE_AUDIO_WIN: do_save_audio_window(); break;
       default: break;
     }
     s_busy = false;

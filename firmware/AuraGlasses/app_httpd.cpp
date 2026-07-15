@@ -128,10 +128,11 @@ static esp_err_t rec_status_handler(httpd_req_t *req) {
   int n = snprintf(
     resp, sizeof(resp),
     "{\"continuous\":%s,\"clip\":%s,\"sec\":%.1f,\"file\":\"%s\",\"dropped\":%u,"
-    "\"sd\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,\"seg_sec\":%u}\n",
+    "\"sd\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,\"seg_sec\":%u,\"win\":%.0f,\"win_sec\":%u}\n",
     audio_continuous_active() ? "true" : "false", audio_clip_active() ? "true" : "false",
     (double)audio_current_sec(), audio_current_file(), (unsigned)audio_dropped_bytes(),
-    sd_ok() ? "true" : "false", sd_free_mb(), sd_total_mb(), g_cfg.seg_sec
+    sd_ok() ? "true" : "false", sd_free_mb(), sd_total_mb(), g_cfg.seg_sec,
+    (double)audio_window_sec(), audio_window_ready() ? g_cfg.win_sec : 0
   );
   json_hdrs(req);
   return httpd_resp_send(req, resp, n);
@@ -607,6 +608,24 @@ static esp_err_t events_handler(httpd_req_t *req) {
   return httpd_resp_send(req, buf, n);
 }
 
+// GET /audio/window/save — dump the rolling window through the worker
+// (serialized with other SD-heavy actions); result arrives in /events.
+static esp_err_t audio_window_save_handler(httpd_req_t *req) {
+  json_hdrs(req);
+  if (!audio_window_ready()) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    return httpd_resp_sendstr(req, "{\"error\":\"rolling window disabled\"}\n");
+  }
+  if (!action_enqueue(ACT_SAVE_AUDIO_WIN, SRC_HTTP)) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"error\":\"action queue full\"}\n");
+  }
+  httpd_resp_set_status(req, "202 Accepted");
+  char resp[64];
+  int n = snprintf(resp, sizeof(resp), "{\"queued\":true,\"held_sec\":%.0f}\n", (double)audio_window_sec());
+  return httpd_resp_send(req, resp, n);
+}
+
 // ── Camera handlers (from CameraWebServer) ───────────────────────────────────
 
 // LED FLASH setup
@@ -920,6 +939,7 @@ void startCameraServer() {
   httpd_uri_t speak_uri = {.uri = "/speak", .method = HTTP_POST, .handler = speak_handler, .user_ctx = NULL};
   httpd_uri_t pad_sim_uri = {.uri = "/pad/sim", .method = HTTP_GET, .handler = pad_sim_handler, .user_ctx = NULL};
   httpd_uri_t events_uri = {.uri = "/events", .method = HTTP_GET, .handler = events_handler, .user_ctx = NULL};
+  httpd_uri_t awin_save_uri = {.uri = "/audio/window/save", .method = HTTP_GET, .handler = audio_window_save_handler, .user_ctx = NULL};
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
 
   log_i("Starting web server on port: '%d'", config.server_port);
@@ -946,6 +966,7 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &speak_uri);
     httpd_register_uri_handler(camera_httpd, &pad_sim_uri);
     httpd_register_uri_handler(camera_httpd, &events_uri);
+    httpd_register_uri_handler(camera_httpd, &awin_save_uri);
   }
 
   config.server_port += 1;

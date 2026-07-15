@@ -177,6 +177,15 @@
       <button class="btn full" id="recBtn" onclick="App.toggleRecord()">🎙 Record clip</button>
       <p class="hint" style="margin-top:10px" id="recHint">Manual clip from the glasses mic — saved to SD card + gallery</p>
     </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="flex:1">
+          <div style="font-weight:600">Rolling window</div>
+          <div class="gmeta" id="winInfo" style="margin:4px 0 0">—</div>
+        </div>
+        <button class="btn small ghost" onclick="App.saveWindow()">💾 Save window</button>
+      </div>
+    </div>
     <div class="card" id="lastRecCard" style="display:none">
       <div class="gmeta">Last clip</div>
       <audio id="lastRecAudio" controls></audio>
@@ -239,6 +248,8 @@
       <input type="number" id="setCapInt" min="0" max="3600" value="60">
       <label>Audio segment length (seconds)</label>
       <input type="number" id="setSegSec" min="15" max="300" value="60">
+      <label>Rolling audio window (seconds, 0 = off — applies after reboot)</label>
+      <input type="number" id="setWinSec" min="0" max="180" step="30" value="60">
       <label style="display:flex;align-items:center;gap:8px;margin-top:14px">
         <input type="checkbox" id="setRecAuto" style="width:auto"> Start continuous logging on boot
       </label>
@@ -671,8 +682,21 @@ const App = {
       if (st.continuous) info = `${st.file.split("/").pop()} · ${st.sec.toFixed(0)}s/${st.seg_sec}s · ` + info;
       if (st.dropped > 0) info += ` · ⚠ dropped ${(st.dropped / 32000).toFixed(1)}s`;
       $("contInfo").textContent = info;
+      $("winInfo").textContent = st.win_sec
+        ? `Mic keeps the last ${st.win_sec}s in memory — holding ${st.win.toFixed(0)}s now`
+        : "off — set a window length in Settings (reboot applies it)";
     } catch {
       $("contInfo").textContent = "device offline";
+    }
+  },
+  async saveWindow() {
+    try {
+      const r = await fetch(dev() + "/audio/window/save");
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+      toast(`💾 Saving last ${d.held_sec}s… (watch for the result toast)`);
+    } catch (e) {
+      toast("Window save failed — " + e.message, 4000);
     }
   },
   async toggleContinuous() {
@@ -711,6 +735,7 @@ const App = {
       $("setCapInt").value = c.cap_interval;
       $("setSegSec").value = c.seg_sec;
       $("setRecAuto").checked = !!c.rec_auto;
+      $("setWinSec").value = c.win_sec ?? 60;
       $("setHoldMs").value = c.hold_ms ?? 600;
       $("setAvol").value = c.avol ?? 85;
       $("setLang").value = c.lang || "English";
@@ -730,6 +755,7 @@ const App = {
         `&cap_interval=${+$("setCapInt").value || 0}&seg_sec=${+$("setSegSec").value || 60}` +
         `&rec_auto=${$("setRecAuto").checked ? 1 : 0}&gmt_off=${-new Date().getTimezoneOffset()}` +
         (pads[0] !== "" ? `&pad_d5_tap=${pads[0]}&pad_d5_hold=${pads[1]}&pad_d6_tap=${pads[2]}&pad_d6_hold=${pads[3]}` : "") +
+        `&win_sec=${+$("setWinSec").value || 0}` +
         `&hold_ms=${+$("setHoldMs").value || 600}&avol=${+$("setAvol").value || 85}` +
         `&lang=${encodeURIComponent($("setLang").value.trim() || "English")}`;
       const r = await fetch(dev() + "/config?" + q);

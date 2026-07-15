@@ -47,6 +47,16 @@ static volatile bool s_continuous = false;
 static volatile bool s_clip = false;
 static volatile bool s_ram_clip_mode = false;  // no-SD fallback
 
+// Rolling retention window: a separate circular buffer that always keeps
+// the last win_sec seconds of mic audio (never drained — overwrites oldest).
+// Allocated once at init from g_cfg.win_sec; keeps the mic pipeline running
+// even when nothing is being written to SD.
+static uint8_t *s_win = NULL;
+static size_t s_win_size = 0;
+static volatile size_t s_win_head = 0;    // next write offset
+static volatile size_t s_win_filled = 0;  // bytes valid (≤ size)
+static volatile bool s_win_freeze = false;
+
 static volatile bool s_rotate_req = false;   // writer: close current, open next
 static char s_next_kind = 'r';               // 'r' = rec segment, 'c' = clip
 
@@ -107,9 +117,29 @@ static void condition(int16_t *pcm, size_t n) {
   }
 }
 
+// ── Rolling window ───────────────────────────────────────────────────────────
+static void win_push(const uint8_t *src, size_t n) {
+  if (!s_win || s_win_freeze || n == 0) {
+    return;
+  }
+  if (n > s_win_size) {  // absurd chunk; keep the tail
+    src += n - s_win_size;
+    n = s_win_size;
+  }
+  size_t h = s_win_head;
+  size_t first = min(n, s_win_size - h);
+  memcpy(s_win + h, src, first);
+  if (n > first) {
+    memcpy(s_win, src + first, n - first);
+  }
+  s_win_head = (h + n) % s_win_size;
+  size_t f = s_win_filled + n;
+  s_win_filled = f > s_win_size ? s_win_size : f;
+}
+
 // ── Filenames ────────────────────────────────────────────────────────────────
 static void make_path(char *out, size_t len, char kind) {
-  const char *prefix = (kind == 'c') ? "clip" : "rec";
+  const char *prefix = (kind == 'c') ? "clip" : (kind == 'w') ? "win" : "rec";
   time_t now = time(NULL);
   if (now > 1577836800) {  // real time is set (past 2020)
     struct tm tm;
@@ -188,10 +218,12 @@ static void writer_task(void *arg) {
       continue;  // no-SD fallback: samples stay in the ring
     }
 
-    bool active = s_pipeline_on;
+    // The mic pipeline may keep running for the retention window with no
+    // file sink; the ring only receives data while a sink is active.
+    bool sink = s_pipeline_on && (s_continuous || s_clip);
     size_t avail = ring_avail();
 
-    if (!s_file && (active && (s_continuous || s_clip))) {
+    if (!s_file && sink) {
       file_open(s_clip ? 'c' : 'r');
     }
 
@@ -231,7 +263,7 @@ static void writer_task(void *arg) {
       }
     }
 
-    if (!active && s_file && ring_avail() == 0) {
+    if (!sink && s_file && ring_avail() == 0) {
       file_close();
     }
   }
@@ -250,6 +282,7 @@ static void capture_task(void *arg) {
         continue;
       }
       condition((int16_t *)scratch, got / 2);
+      win_push(scratch, got);  // retention window always listens
       if (s_ram_clip_mode) {
         // Linear record into the ring itself (head only, no wrap).
         size_t space = RING_BYTES - s_ram_len;
@@ -259,8 +292,8 @@ static void capture_task(void *arg) {
         if (n < got) {
           s_pipeline_on = false;  // RAM full — stop
         }
-      } else {
-        ring_push(scratch, got);
+      } else if (s_continuous || s_clip) {
+        ring_push(scratch, got);  // ring only feeds an open file sink
       }
     }
   }
@@ -282,6 +315,17 @@ bool audio_init() {
   if (!s_ring) {
     log_e("audio: ring alloc failed");
     return false;
+  }
+
+  if (g_cfg.win_sec > 0) {
+    s_win_size = (size_t)g_cfg.win_sec * BYTES_PER_SEC;
+    s_win = (uint8_t *)heap_caps_malloc(s_win_size, MALLOC_CAP_SPIRAM);
+    if (!s_win) {
+      log_e("audio: window alloc (%u B) failed — rolling window disabled", (unsigned)s_win_size);
+      s_win_size = 0;
+    } else {
+      log_i("audio: %us rolling window (%u KB PSRAM)", g_cfg.win_sec, (unsigned)(s_win_size / 1024));
+    }
   }
 
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -316,7 +360,13 @@ bool audio_init() {
 
   xTaskCreatePinnedToCore(capture_task, "aura_mic", 4096, NULL, tskIDLE_PRIORITY + 3, &s_cap_task, 1);
   xTaskCreatePinnedToCore(writer_task, "aura_sdw", 6144, NULL, tskIDLE_PRIORITY + 2, &s_wr_task, 1);
-  return s_cap_task && s_wr_task;
+  if (!s_cap_task || !s_wr_task) {
+    return false;
+  }
+  if (s_win) {
+    pipeline_start();  // the retention window listens from boot
+  }
+  return true;
 }
 
 bool audio_continuous_start() {
@@ -335,9 +385,11 @@ bool audio_continuous_start() {
 bool audio_continuous_stop() {
   xSemaphoreTake(s_state_mtx, portMAX_DELAY);
   s_continuous = false;
-  if (!s_clip) {
+  if (!s_clip && !s_win) {
     s_pipeline_on = false;  // writer drains the ring, then closes the file
   }
+  // With the window buffer active the mic keeps running; the writer closes
+  // the file as soon as the ring is drained (no sink remains).
   xSemaphoreGive(s_state_mtx);
   return true;
 }
@@ -386,6 +438,9 @@ bool audio_clip_stop(char *out_path, size_t out_len) {
     if (out_path && out_len) {
       out_path[0] = 0;
     }
+    if (s_win) {
+      pipeline_start();  // resume listening for the retention window
+    }
     xSemaphoreGive(s_state_mtx);
     return s_ram_len > 0;
   }
@@ -393,7 +448,7 @@ bool audio_clip_stop(char *out_path, size_t out_len) {
   if (s_continuous) {
     s_next_kind = 'r';
     s_rotate_req = true;  // clip → back to a rec segment
-  } else {
+  } else if (!s_win) {
     s_pipeline_on = false;
   }
   xSemaphoreGive(s_state_mtx);
@@ -438,4 +493,64 @@ const uint8_t *audio_ram_clip() {
 
 size_t audio_ram_clip_len() {
   return s_ram_len;
+}
+
+// ── Rolling window API ───────────────────────────────────────────────────────
+bool audio_window_ready() {
+  return s_win != NULL && s_pipeline_on;
+}
+
+float audio_window_sec() {
+  return (float)s_win_filled / BYTES_PER_SEC;
+}
+
+bool audio_window_save(char *out_path, size_t out_len) {
+  if (!s_win || !sd_ok() || s_win_filled == 0) {
+    return false;
+  }
+  // Freeze pushes for the duration of the dump (a few seconds of audio is
+  // dropped from the window, never from any recording file). Let any
+  // in-flight push finish before snapshotting.
+  s_win_freeze = true;
+  vTaskDelay(pdMS_TO_TICKS(150));
+  size_t filled = s_win_filled;
+  size_t head = s_win_head;
+
+  char path[64];
+  make_path(path, sizeof(path), 'w');
+  sd_lock();
+  File f = SD.open(path, FILE_WRITE);
+  sd_unlock();
+  if (!f) {
+    s_win_freeze = false;
+    log_e("audio: open %s failed", path);
+    return false;
+  }
+
+  uint8_t h[44];
+  wav_header(h, (uint32_t)filled);
+  sd_lock();
+  bool ok = f.write(h, 44) == 44;
+  sd_unlock();
+
+  // Oldest byte: head when the buffer has wrapped, else offset 0.
+  size_t start = (filled == s_win_size) ? head : 0;
+  size_t written = 0;
+  while (ok && written < filled) {
+    size_t pos = (start + written) % s_win_size;
+    size_t n = min((size_t)32768, min(filled - written, s_win_size - pos));
+    sd_lock();
+    ok = f.write(s_win + pos, n) == n;
+    sd_unlock();
+    written += n;
+  }
+  sd_lock();
+  f.close();
+  sd_unlock();
+  s_win_freeze = false;
+  log_i("audio: window %s (%u B) %s", path, (unsigned)written, ok ? "saved" : "WRITE FAILED");
+  if (ok && out_path && out_len) {
+    strlcpy(out_path, path, out_len);
+  }
+  return ok;
 }
