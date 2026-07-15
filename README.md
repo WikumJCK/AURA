@@ -1,70 +1,135 @@
 # AURA
 
 AURA (Augmented Understanding & Response Assistant) is an open-source
-AI-assisted smart glasses project powered by the Seeed Studio XIAO ESP32-S3.
-The goal is to capture what the wearer sees and hears, send that data to a
-more powerful device or cloud service, and then play back spoken responses.
-This repository contains firmware sketches, a minimal server and documentation
-so you can build your own pair of assistive glasses.
+AI-assisted smart glasses project powered by the Seeed Studio XIAO ESP32-S3
+Sense. The glasses capture what the wearer sees and hears, and a web app on
+your phone views the live camera, captures photos, records audio from the
+on-board mic, and runs AI on it all (OCR, scene description/detection, and
+speech transcription) via the Gemini API.
 
-## 1. Hardware Overview
+## How it works
 
-* **Seeed Studio XIAO ESP32-S3 Sense** – provides Wi‑Fi/BLE, a dual‑core MCU and
-  an on-board PDM microphone.
-* **OV2640 camera module** – captures the user's point of view.
-* **MAX98357A I2S amplifier + small speaker** – plays audio responses.
-* Optional: momentary button for triggering capture and a Li‑Po battery for
-  portable use.
+```
+┌───────────────────────┐   WiFi (iPhone hotspot   ┌──────────────────────┐
+│ XIAO ESP32-S3 Sense   │    or home network)      │ Phone / PC browser   │
+│  OV2640 camera        │ ◄──────── HTTP ────────► │  AURA web app        │
+│  PDM microphone       │   MJPEG / JPEG / WAV     │  (served BY the      │
+│  serves the web app   │                          │   glasses at /)      │
+└───────────────────────┘                          └──────────┬───────────┘
+                                                              │ HTTPS
+                                                              ▼
+                                                     Gemini API (OCR, vision,
+                                                     audio transcription)
+```
 
-### Wiring
+No PC or router is required at runtime: the glasses join your iPhone's
+Personal Hotspot, you open `http://aura.local` in Safari, and the phone's
+cellular connection handles the AI calls.
 
-1. Power the MAX98357A from the XIAO's 5V and GND pins.
-2. Connect I2S lines:
-   * `BCLK` → chosen GPIO for `I2S_BCLK`
-   * `LRC`  → chosen GPIO for `I2S_LRCK`
-   * `DIN`  → chosen GPIO for `I2S_DOUT`
-3. Attach the speaker to the amplifier output.
-4. Plug the OV2640 into the camera connector on the Sense board or wire the DVP
-   pins manually.
+## Hardware
 
-## 2. Firmware
+* **Seeed Studio XIAO ESP32-S3 Sense** — WiFi, dual-core MCU, 8 MB PSRAM,
+  on-board OV2640 camera and PDM microphone, microSD slot.
+* **MAX98357A I2S amplifier + speaker** — DIN=GPIO1 (D0), BCLK=GPIO2 (D1),
+  LRC=GPIO3 (D2), Vin=5V. Runs on I2S1 (the mic owns I2S0), so it can play
+  while recording.
+* Two touch/button inputs on GPIO5 (D5 = capture) and GPIO6 (D6 = record audio).
 
-The `firmware/` directory contains a starter Arduino sketch
-(`GlassesFirmware.ino`) that:
+## Firmware (`firmware/AuraGlasses/`)
 
-1. Connects to a Wi‑Fi network.
-2. Configures the camera, microphone and I2S amplifier.
-3. Demonstrates audio playback by generating a simple test tone via I2S.
-4. Provides a loopback test routing microphone input directly to the speaker.
+Arduino sketch for the ESP32 core 3.x. It:
 
+1. Joins the first available known network (`WiFiMulti`) and announces itself
+   as `aura.local` via mDNS. Edit `KNOWN_APS` in `AuraGlasses.ino` for your
+   hotspot/network credentials.
+2. Serves the AURA web app (gzipped into `app_index.h`) plus these endpoints:
 
-Further development should add routines to record microphone audio, capture
-images and POST them to the server for processing. When a response is received,
-stream the returned audio to the MAX98357A using the same I2S interface.
+| Endpoint | Description |
+|---|---|
+| `GET /` | The AURA web app |
+| `GET /capture` | Single JPEG frame (configured size/quality, up to UXGA) |
+| `GET :81/stream` | MJPEG live stream (on demand) |
+| `GET /rec/start` `/rec/stop` `/rec/status` | Continuous audio logging to SD (rotating WAV segments) |
+| `GET /audio/start` `/audio/stop` `/audio/status` | Manual clip; stop downloads the WAV (also saved to SD) |
+| `GET /sd/list?dir=` `/sd/file?path=` `/sd/delete?path=` | Browse/download/delete SD files |
+| `POST /sd/write?path=&mode=a\|w` | Write logs (used by the app's journal) |
+| `GET /config` | Get/set persisted settings: photo interval, image size/quality, segment length, boot autostart, timezone |
+| `GET /tone?freq=&ms=&vol=` | Play a beep through the speaker |
+| `POST /speak?vol=` | Play a 16-bit PCM WAV through the speaker (used for spoken summaries) |
+| `GET /pad` | Touch button state `{d5, d6}` |
+| `GET /health` | `{ip, ssid, rssi, heap, psram, recording, continuous, sd, sd_free_mb}` |
+| `GET /status`, `/control` | Camera sensor settings |
 
-## 3. Companion Server
+The glasses work standalone: on boot they join WiFi, sync time via NTP, and
+(if enabled) start logging audio segments to `/rec/` and periodic photos to
+`/img/` on the SD card. The app's **Rec → Journal** transcribes new segments
+via Gemini and keeps a daily summary in `/logs/` on the card.
 
-Heavy AI tasks are offloaded to a networked PC or phone. The `server/` folder
-contains a minimal Flask application that exposes a `/query` endpoint. It
-accepts an audio clip and optional image, then responds with a (currently
-silent) WAV file. Replace the placeholder functions in `app.py` with calls to
-services such as Whisper, Tesseract, GPT or Google Text‑to‑Speech.
+Older sketches (`CamServer/`, `GlassesFirmware/`) are kept as reference.
 
-## 4. End-to-End Flow
+### Build & flash
 
-1. User presses the button or speaks a wake word.
-2. XIAO records audio and, if needed, captures an image.
-3. Data is sent over Wi‑Fi to the companion server on the same network.
-4. The server performs speech recognition, vision analysis and language
-   reasoning, then generates a spoken reply.
-5. The reply audio is streamed back to the glasses and played through the
-   MAX98357A amplifier.
+One command (regenerates the embedded app, compiles, flashes):
 
-## 5. Future Work
+```powershell
+powershell -File tools\flash.ps1 -Port COM8 [-Monitor]
+```
 
-* Integrate real STT, vision and TTS services in `server/app.py`.
-* Handle reminders and other assistant features.
-* Optimize latency by running lightweight models locally where possible.
+Or manually — note this board fails esptool's default reset ("Wrong boot mode
+detected"), so `arduino-cli upload` doesn't work; `tools\flash.ps1` flashes via
+esptool with `--before usb_reset` instead:
+
+```sh
+python tools/build_web.py   # regenerate app_index.h after editing app/index.html
+arduino-cli compile -b esp32:esp32:XIAO_ESP32S3:PSRAM=opi,PartitionScheme=default_8MB firmware/AuraGlasses
+arduino-cli monitor -p COM8 -c baudrate=115200
+```
+
+Gotcha: if opening COM8 fails with "semaphore timeout", a Bluetooth serial
+port has grabbed the same COM number — disable the Bluetooth COM port in
+Device Manager.
+
+## Web app (`app/index.html`)
+
+Single-file vanilla-JS app, embedded into the firmware. Features:
+
+* **Live** — MJPEG stream with auto-reconnect, photo capture, frame bursts,
+  one-tap "Analyze now".
+* **Audio** — record from the glasses' mic, play back, transcribe.
+* **Gallery** — captures persist in IndexedDB; per-item OCR, description,
+  transcription, burst analysis, and free-form "Ask AI" questions.
+* **Settings** — Gemini API key (get a free one at
+  [aistudio.google.com](https://aistudio.google.com)), model choice, device
+  host override, burst tuning.
+
+### Using it on an iPhone
+
+1. Enable Personal Hotspot and stay on the hotspot settings screen; power the
+   glasses and wait until they join (watch the serial monitor if unsure).
+2. Open `http://aura.local` in Safari (or the device IP shown on serial,
+   usually `172.20.10.x`).
+3. Share → **Add to Home Screen** for a fullscreen app experience.
+4. Paste your Gemini API key in Settings.
+
+### Developing the app without reflashing
+
+Serve the app from your PC and point it at the device:
+
+```sh
+python -m http.server 8000 -d app
+# open http://localhost:8000, set Settings → Device host to the device IP
+```
+
+Reflash (with a fresh `build_web.py` run) when you want the on-device copy
+updated.
+
+## Future work
+
+* Wake-word / hands-free capture using the pad buttons.
+* SD card space management (auto-prune old recordings/photos).
+* SoftAP setup portal for entering WiFi credentials without reflashing.
+* Optional local AI server mode (`server/video_streamer.py` shows BLIP
+  captioning on a PC).
 
 ## License
 

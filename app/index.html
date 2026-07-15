@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AURA">
+<meta name="theme-color" content="#0c0e14">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<title>AURA</title>
+<style>
+  :root {
+    --bg: #0c0e14; --panel: #161a24; --panel2: #1e2432; --line: #2a3040;
+    --text: #e8ecf4; --dim: #8b93a7; --accent: #6c8cff; --accent2: #4e6ae0;
+    --ok: #3ecf8e; --warn: #f5a623; --err: #f0506e; --rec: #ff4d6a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column; overscroll-behavior: none;
+  }
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: calc(env(safe-area-inset-top) + 10px) 16px 10px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: 2px; }
+  header h1 span { color: var(--accent); }
+  #connChip {
+    margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--panel2); color: var(--dim); border: 1px solid var(--line);
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  #connDot { width: 8px; height: 8px; border-radius: 50%; background: var(--err); }
+  #connDot.ok { background: var(--ok); }
+  main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .view { display: none; padding: 14px; }
+  .view.active { display: block; }
+  nav {
+    display: flex; background: var(--panel); border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav button {
+    flex: 1; background: none; border: none; color: var(--dim);
+    font-size: 11px; padding: 8px 0 10px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+  }
+  nav button.active { color: var(--accent); }
+  nav button svg { width: 22px; height: 22px; fill: currentColor; }
+
+  .btn {
+    background: var(--accent2); color: #fff; border: none; border-radius: 12px;
+    padding: 12px 16px; font-size: 15px; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .btn:active { opacity: .8; }
+  .btn:disabled { opacity: .4; }
+  .btn.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
+  .btn.small { padding: 8px 12px; font-size: 13px; border-radius: 9px; }
+  .btn.rec { background: var(--rec); }
+  .btn.full { width: 100%; }
+  .row { display: flex; gap: 10px; margin-top: 12px; }
+  .row .btn { flex: 1; }
+
+  /* Live */
+  #liveWrap { position: relative; border-radius: 14px; overflow: hidden; background: #000; aspect-ratio: 4/3; }
+  #liveImg { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #liveOff {
+    position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px;
+    align-items: center; justify-content: center; color: var(--dim); font-size: 14px;
+    background: var(--panel);
+  }
+  #padChip { position: absolute; top: 8px; right: 8px; display: flex; gap: 6px; }
+  .padDot { width: 14px; height: 14px; border-radius: 50%; background: #333a4c; border: 1px solid var(--line); }
+  .padDot.on { background: var(--accent); }
+
+  /* Audio */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 12px; }
+  #recTime { font-size: 40px; font-variant-numeric: tabular-nums; text-align: center; margin: 8px 0 2px; }
+  #recBarWrap { height: 6px; background: var(--panel2); border-radius: 3px; margin: 12px 0; overflow: hidden; }
+  #recBar { height: 100%; width: 0%; background: var(--rec); transition: width .3s linear; }
+  .hint { color: var(--dim); font-size: 13px; text-align: center; }
+
+  /* Gallery */
+  .gitem { display: flex; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
+  .gthumb { width: 92px; height: 92px; border-radius: 10px; object-fit: cover; background: #000; flex-shrink: 0; }
+  .gthumb.audioTile { display: flex; align-items: center; justify-content: center; font-size: 34px; background: var(--panel2); }
+  .gbody { flex: 1; min-width: 0; }
+  .gmeta { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
+  .gactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .airesult { background: var(--panel2); border-radius: 10px; padding: 10px; margin-top: 8px; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+  .airesult .task { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 4px; }
+  .empty { color: var(--dim); text-align: center; padding: 48px 20px; font-size: 14px; }
+
+  /* Settings */
+  label { display: block; color: var(--dim); font-size: 13px; margin: 14px 0 6px; }
+  input, select, textarea {
+    width: 100%; background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 12px; font-size: 15px;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+
+  /* Toast + modal */
+  #toast {
+    position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(20px);
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    padding: 10px 18px; border-radius: 12px; font-size: 14px; opacity: 0;
+    transition: all .25s; pointer-events: none; max-width: 86vw; z-index: 50; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #spinner {
+    position: fixed; top: calc(env(safe-area-inset-top) + 14px); left: 50%; transform: translateX(-50%);
+    z-index: 60; display: none; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 6px 14px; font-size: 12px; color: var(--accent);
+    align-items: center; gap: 8px;
+  }
+  #spinner.show { display: flex; }
+  .spin { width: 12px; height: 12px; border: 2px solid var(--accent); border-top-color: transparent; border-radius: 50%; animation: sp 1s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  audio { width: 100%; margin-top: 8px; }
+  #askModal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    align-items: flex-end; z-index: 70;
+  }
+  #askModal.show { display: flex; }
+  #askSheet { background: var(--panel); width: 100%; border-radius: 18px 18px 0 0; padding: 18px 16px calc(env(safe-area-inset-bottom) + 18px); }
+</style>
+</head>
+<body>
+<header>
+  <h1>AU<span>RA</span></h1>
+  <div id="connChip"><div id="connDot"></div><span id="connText">connecting…</span></div>
+</header>
+
+<main>
+  <!-- LIVE -->
+  <section class="view active" id="view-live">
+    <div id="liveWrap">
+      <img id="liveImg" alt="">
+      <div id="liveOff">
+        <div>Stream paused</div>
+        <button class="btn small ghost" onclick="App.toggleStream()">Start</button>
+      </div>
+      <div id="padChip"><div class="padDot" id="padD5"></div><div class="padDot" id="padD6"></div></div>
+    </div>
+    <div class="row">
+      <button class="btn" onclick="App.capture()">📷 Capture</button>
+      <button class="btn ghost" onclick="App.burst()">🎞 Burst</button>
+    </div>
+    <div class="row">
+      <button class="btn ghost" onclick="App.toggleStream()" id="streamBtn">⏸ Pause stream</button>
+      <button class="btn" onclick="App.analyzeNow()">✨ Analyze now</button>
+    </div>
+    <p class="hint" style="margin-top:12px">Device buttons: D5 = capture, D6 = record audio</p>
+  </section>
+
+  <!-- RECORDER / JOURNAL -->
+  <section class="view" id="view-audio">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="flex:1">
+          <div style="font-weight:600">Continuous logging</div>
+          <div class="gmeta" id="contInfo" style="margin:4px 0 0">—</div>
+        </div>
+        <button class="btn small" id="contBtn" onclick="App.toggleContinuous()">…</button>
+      </div>
+    </div>
+    <div class="card">
+      <div id="recTime">0.0s</div>
+      <div id="recBarWrap"><div id="recBar"></div></div>
+      <button class="btn full" id="recBtn" onclick="App.toggleRecord()">🎙 Record clip</button>
+      <p class="hint" style="margin-top:10px" id="recHint">Manual clip from the glasses mic — saved to SD card + gallery</p>
+    </div>
+    <div class="card" id="lastRecCard" style="display:none">
+      <div class="gmeta">Last clip</div>
+      <audio id="lastRecAudio" controls></audio>
+      <div class="gactions">
+        <button class="btn small" onclick="App.transcribeLast()">📝 Transcribe</button>
+      </div>
+      <div id="lastRecResult"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div style="font-weight:600;flex:1">Journal <span class="gmeta" id="journalDate"></span></div>
+        <button class="btn small ghost" onclick="App.speakSummary()">🔊 Speak</button>
+        <button class="btn small" onclick="App.processNew(false)">🔁 Process new</button>
+      </div>
+      <label style="margin:0 0 10px;display:flex;align-items:center;gap:8px;font-size:13px">
+        <input type="checkbox" id="autoProc" style="width:auto" onchange="App.saveAutoProc()"> Auto-process while app is open
+      </label>
+      <div id="summaryBox" class="airesult" style="display:none;margin-top:0"></div>
+      <div class="gmeta" style="margin-top:12px">Recordings on SD card</div>
+      <div id="recList" style="font-size:13px"></div>
+    </div>
+  </section>
+
+  <!-- GALLERY -->
+  <section class="view" id="view-gallery">
+    <div id="galleryList"></div>
+    <div class="empty" id="galleryEmpty">Nothing captured yet.<br>Grab a photo or recording first.</div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view" id="view-settings">
+    <div class="card">
+      <label>Gemini API key <span style="color:var(--dim)">(aistudio.google.com → Get API key)</span></label>
+      <input type="password" id="setKey" placeholder="AIza...">
+      <label>Model <span style="color:var(--dim)">(tap Load to list what your key can use)</span></label>
+      <div style="display:flex;gap:10px">
+        <select id="setModel" style="flex:1">
+          <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+          <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+          <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+        </select>
+        <button class="btn small ghost" style="flex:0 0 auto" onclick="App.loadModels()">Load</button>
+      </div>
+      <label>Device host <span style="color:var(--dim)">(auto when served from the glasses)</span></label>
+      <input type="text" id="setHost" placeholder="aura.local or 172.20.10.x">
+      <label>Burst frames / interval (ms)</label>
+      <div style="display:flex;gap:10px">
+        <input type="number" id="setBurstN" min="2" max="10" value="5">
+        <input type="number" id="setBurstMs" min="200" max="3000" step="100" value="700">
+      </div>
+      <button class="btn full" style="margin-top:16px" onclick="App.saveSettings()">Save</button>
+    </div>
+    <div class="card">
+      <div class="gmeta">Device (stored on the glasses)</div>
+      <label>Image size (photos + periodic log)</label>
+      <select id="setFsize"><option value="">connect device to load…</option></select>
+      <label>JPEG quality (lower = better, 10 = max)</label>
+      <input type="number" id="setJpegQ" min="5" max="40" value="10">
+      <label>Periodic photo interval (seconds, 0 = off)</label>
+      <input type="number" id="setCapInt" min="0" max="3600" value="60">
+      <label>Audio segment length (seconds)</label>
+      <input type="number" id="setSegSec" min="15" max="300" value="60">
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px">
+        <input type="checkbox" id="setRecAuto" style="width:auto"> Start continuous logging on boot
+      </label>
+      <button class="btn full" style="margin-top:16px" onclick="App.saveDeviceConfig()">Save to device</button>
+    </div>
+    <div class="card">
+      <div class="gmeta">Device</div>
+      <div id="devInfo" style="font-size:13px;color:var(--dim)">—</div>
+      <div class="gactions">
+        <button class="btn small ghost" onclick="App.pollHealth(true)">Refresh</button>
+        <button class="btn small ghost" onclick="fetch(dev()+'/tone?freq=660&ms=400&vol=85')">🔊 Test speaker</button>
+        <button class="btn small ghost" onclick="App.clearGallery()">Clear gallery</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-view="live" class="active" onclick="App.showView('live')">
+    <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm8-3h-2.6l-1.7-2H8.3L6.6 5H4a2 2 0 00-2 2v11a2 2 0 002 2h16a2 2 0 002-2V7a2 2 0 00-2-2zm-8 12a5.5 5.5 0 110-11 5.5 5.5 0 010 11z"/></svg>Live
+  </button>
+  <button data-view="audio" onclick="App.showView('audio')">
+    <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 003-3V5a3 3 0 10-6 0v6a3 3 0 003 3zm5-3a5 5 0 01-10 0H5a7 7 0 006 6.92V21h2v-3.08A7 7 0 0019 11h-2z"/></svg>Rec
+  </button>
+  <button data-view="gallery" onclick="App.showView('gallery')">
+    <svg viewBox="0 0 24 24"><path d="M21 19V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2zM8.5 13.5l2.5 3 3.5-4.5 4.5 6H5l3.5-4.5z"/></svg>Gallery
+  </button>
+  <button data-view="settings" onclick="App.showView('settings')">
+    <svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.5 7.5 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.61-.22l-2.39.96a7.3 7.3 0 00-1.62-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 00-.61.22L2.65 8.84a.5.5 0 00.12.64l2.03 1.58a7.5 7.5 0 000 1.88l-2.03 1.58a.5.5 0 00-.12.64l1.92 3.32c.13.23.4.32.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.04.24.25.42.5.42h3.84c.25 0 .46-.18.5-.42l.36-2.54a7.3 7.3 0 001.62-.94l2.39.96c.21.1.48.01.61-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7z"/></svg>Settings
+  </button>
+</nav>
+
+<div id="toast"></div>
+<div id="spinner"><div class="spin"></div><span id="spinnerText">Thinking…</span></div>
+
+<div id="askModal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div id="askSheet">
+    <label>Ask AI about this item</label>
+    <textarea id="askText" rows="3" placeholder="e.g. What brand is this? Translate the text to English…"></textarea>
+    <div class="row">
+      <button class="btn ghost" onclick="document.getElementById('askModal').classList.remove('show')">Cancel</button>
+      <button class="btn" onclick="App.askSubmit()">Ask</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ── Settings ─────────────────────────────────────────────────────────── */
+const S = {
+  get key()     { return localStorage.getItem("aura.apiKey") || ""; },
+  set key(v)    { localStorage.setItem("aura.apiKey", v); },
+  get model()   { return localStorage.getItem("aura.model") || "gemini-3.5-flash"; },
+  set model(v)  { localStorage.setItem("aura.model", v); },
+  get host()    {
+    const h = localStorage.getItem("aura.host");
+    if (h) return h;
+    // When served from the glasses, the page origin IS the device.
+    if (location.hostname && !["localhost", "127.0.0.1", ""].includes(location.hostname)) return location.hostname;
+    return "aura.local";
+  },
+  set host(v)   { localStorage.setItem("aura.host", v); },
+  get burstN()  { return +(localStorage.getItem("aura.burstN") || 5); },
+  set burstN(v) { localStorage.setItem("aura.burstN", v); },
+  get burstMs() { return +(localStorage.getItem("aura.burstMs") || 700); },
+  set burstMs(v){ localStorage.setItem("aura.burstMs", v); },
+};
+const dev = () => `http://${S.host}`;
+const devStream = () => `http://${S.host}:81`;
+
+/* ── Tiny helpers ─────────────────────────────────────────────────────── */
+const $ = (id) => document.getElementById(id);
+function toast(msg, ms = 2600) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), ms);
+}
+function busy(on, text) {
+  $("spinnerText").textContent = text || "Thinking…";
+  $("spinner").classList.toggle("show", !!on);
+}
+function blobToBase64(blob) {
+  return new Promise((ok, err) => {
+    const r = new FileReader();
+    r.onload = () => ok(r.result.split(",")[1]);
+    r.onerror = err;
+    r.readAsDataURL(blob);
+  });
+}
+const fmtTime = (ts) => new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+// crypto.randomUUID is unavailable on insecure (plain-HTTP) origins like this one
+const uid = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+const dayStr = () => new Date().toISOString().slice(0, 10);
+// rec_20260715_101530.wav → "10:15:30"
+function fnameTime(name) {
+  const m = name.match(/_(\d{8})_(\d{2})(\d{2})(\d{2})\.wav$/);
+  return m ? `${m[2]}:${m[3]}:${m[4]}` : name.replace(".wav", "");
+}
+const wavSec = (size) => Math.max(0, (size - 44) / 32000);
+
+/* ── SD helpers ───────────────────────────────────────────────────────────── */
+async function sdWrite(path, mode, text) {
+  const r = await fetch(`${dev()}/sd/write?path=${encodeURIComponent(path)}&mode=${mode}`, { method: "POST", body: text });
+  if (!r.ok) throw new Error("SD write failed: HTTP " + r.status);
+}
+async function sdRead(path) {
+  const r = await fetch(`${dev()}/sd/file?path=${encodeURIComponent(path)}`);
+  return r.ok ? r.text() : "";
+}
+const summaryPath = () => `/logs/${dayStr()}_summary.md`;
+// Wrap raw 16-bit mono PCM in a WAV container for the device's /speak endpoint
+function pcmToWav(pcm, rate) {
+  const h = new DataView(new ArrayBuffer(44));
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, "RIFF"); h.setUint32(4, 36 + pcm.length, true); w(8, "WAVEfmt ");
+  h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true);
+  h.setUint32(24, rate, true); h.setUint32(28, rate * 2, true);
+  h.setUint16(32, 2, true); h.setUint16(34, 16, true);
+  w(36, "data"); h.setUint32(40, pcm.length, true);
+  return new Blob([h.buffer, pcm], { type: "audio/wav" });
+}
+const transcriptsPath = () => `/logs/${dayStr()}_transcripts.md`;
+
+/* ── Processed-recordings tracking (survives reloads) ─────────────────────── */
+function getProcessed() {
+  try { return JSON.parse(localStorage.getItem("aura.processed") || "{}"); } catch { return {}; }
+}
+function markProcessed(name) {
+  const p = getProcessed();
+  p[name] = 1;
+  const keys = Object.keys(p);
+  if (keys.length > 800) for (const k of keys.slice(0, keys.length - 800)) delete p[k];
+  localStorage.setItem("aura.processed", JSON.stringify(p));
+}
+
+/* ── IndexedDB gallery ────────────────────────────────────────────────── */
+const DB = {
+  _db: null,
+  open() {
+    return new Promise((ok, err) => {
+      if (this._db) return ok(this._db);
+      const q = indexedDB.open("aura", 1);
+      q.onupgradeneeded = () => q.result.createObjectStore("media", { keyPath: "id" });
+      q.onsuccess = () => { this._db = q.result; ok(this._db); };
+      q.onerror = () => err(q.error);
+    });
+  },
+  async put(item) {
+    const db = await this.open();
+    return new Promise((ok, err) => {
+      const tx = db.transaction("media", "readwrite");
+      tx.objectStore("media").put(item);
+      tx.oncomplete = ok;
+      tx.onerror = () => err(tx.error);
+    });
+  },
+  async all() {
+    const db = await this.open();
+    return new Promise((ok, err) => {
+      const q = db.transaction("media").objectStore("media").getAll();
+      q.onsuccess = () => ok(q.result.sort((a, b) => b.ts - a.ts));
+      q.onerror = () => err(q.error);
+    });
+  },
+  async del(id) {
+    const db = await this.open();
+    return new Promise((ok, err) => {
+      const tx = db.transaction("media", "readwrite");
+      tx.objectStore("media").delete(id);
+      tx.oncomplete = ok;
+      tx.onerror = () => err(tx.error);
+    });
+  },
+  async clear() {
+    const db = await this.open();
+    return new Promise((ok, err) => {
+      const tx = db.transaction("media", "readwrite");
+      tx.objectStore("media").clear();
+      tx.oncomplete = ok;
+      tx.onerror = () => err(tx.error);
+    });
+  },
+};
+
+/* ── Gemini (serialized queue — free tier is rate-limited) ────────────── */
+const AI = {
+  _chain: Promise.resolve(),
+  run(parts, label) {
+    this._chain = this._chain.catch(() => {}).then(() => this._call(parts, label));
+    return this._chain;
+  },
+  async _call(parts, label) {
+    if (!S.key) {
+      App.showView("settings");
+      throw new Error("Set your Gemini API key in Settings first");
+    }
+    busy(true, label || "Thinking…");
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${S.model}:generateContent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": S.key },
+          body: JSON.stringify({ contents: [{ parts }] }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = data.error?.message || `HTTP ${res.status}`;
+        throw new Error(res.status === 429 ? "Rate limited (free tier) — wait a minute and retry" : msg);
+      }
+      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+      if (!text) throw new Error("Empty response from Gemini");
+      return text.trim();
+    } finally {
+      busy(false);
+    }
+  },
+  async imagePart(blob) {
+    return { inline_data: { mime_type: "image/jpeg", data: await blobToBase64(blob) } };
+  },
+  async audioPart(blob) {
+    return { inline_data: { mime_type: "audio/wav", data: await blobToBase64(blob) } };
+  },
+};
+const PROMPTS = {
+  ocr: "Extract all text visible in this image, verbatim. Preserve the layout using line breaks. If there is no readable text, reply exactly: No text found.",
+  describe: "You are the vision assistant of smart glasses. Describe this image in 2-3 sentences, then list the distinct objects you detect as bullet points with their approximate position (left/center/right, top/bottom).",
+  transcribe: "Transcribe this audio recording verbatim. If it is not speech, briefly describe the sound instead.",
+  burst: (n, ms) => `These are ${n} sequential frames captured about ${ms} ms apart by smart glasses. Describe the scene and what happens or changes across the frames.`,
+  segment: "This is an ambient recording from wearable smart glasses. Transcribe any speech verbatim. If there is no intelligible speech at all, reply exactly: (no speech)",
+  summary: (prev, added) =>
+    `You maintain a personal daily journal from a wearer's smart-glasses voice recordings.\n\n` +
+    `Previous summary of today (may be empty):\n${prev || "(empty)"}\n\n` +
+    `New transcript entries (with times):\n${added}\n\n` +
+    `Rewrite the COMPLETE updated summary for today: short markdown bullets grouped by topic, ` +
+    `mention approximate times, and end with an "Action items" list if any were spoken. Output only the summary.`,
+};
+
+/* ── App ──────────────────────────────────────────────────────────────── */
+const App = {
+  streaming: false,
+  recording: false,
+  _recPoll: null,
+  _lastRecBlob: null,
+  _askItemId: null,
+  _padPrev: { d5: 0, d6: 0 },
+
+  init() {
+    $("setKey").value = S.key;
+    this._ensureModelOption(S.model);
+    $("setModel").value = S.model;
+    $("setHost").value = localStorage.getItem("aura.host") || "";
+    $("setHost").placeholder = S.host;
+    $("setBurstN").value = S.burstN;
+    $("setBurstMs").value = S.burstMs;
+    $("liveImg").onerror = () => {
+      if (this.streaming) setTimeout(() => { if (this.streaming) this.startStream(); }, 2000);
+    };
+    this.stopStream();  // live view is on-demand; the glasses log on their own
+    $("autoProc").checked = localStorage.getItem("aura.autoProc") === "1";
+    $("journalDate").textContent = dayStr();
+    this.renderGallery();
+    this.pollHealth();
+    this.pollRec();
+    this.loadDeviceConfig();
+    this.renderSummaryFromSd();
+    setInterval(() => this.pollHealth(), 5000);
+    setInterval(() => this.pollPad(), 1000);
+    setInterval(() => this.pollRec(), 3000);
+    setInterval(() => {
+      if ($("autoProc").checked && S.key && document.visibilityState === "visible") this.processNew(true);
+    }, 180000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && this.streaming) this.startStream();
+    });
+  },
+
+  showView(name) {
+    document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
+    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+    if (name === "gallery") this.renderGallery();
+    if (name === "audio") {
+      this.renderRecList();
+      this.renderSummaryFromSd();
+    }
+  },
+
+  _ensureModelOption(name) {
+    const sel = $("setModel");
+    if (![...sel.options].some((o) => o.value === name)) {
+      const o = document.createElement("option");
+      o.value = o.textContent = name;
+      sel.appendChild(o);
+    }
+  },
+
+  // Model names churn — ask the API what this key can actually use.
+  async loadModels() {
+    const key = $("setKey").value.trim() || S.key;
+    if (!key) { toast("Enter your API key first"); return; }
+    try {
+      busy(true, "Loading models…");
+      const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
+        headers: { "x-goog-api-key": key },
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error?.message || "HTTP " + r.status);
+      const models = (data.models || [])
+        .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+        .map((m) => m.name.replace("models/", ""))
+        .filter((m) => !/embedding|imagen|veo|tts|image|live|audio|computer-use|robotics/.test(m));
+      if (!models.length) throw new Error("No usable models returned for this key");
+      const sel = $("setModel");
+      const cur = sel.value;
+      sel.innerHTML = "";
+      for (const m of models) this._ensureModelOption(m);
+      sel.value = models.includes(cur) ? cur
+        : models.find((m) => /flash/.test(m) && !/lite|preview/.test(m)) || models[0];
+      toast(`${models.length} models available — pick one and Save`);
+    } catch (e) {
+      toast(e.message, 4000);
+    } finally {
+      busy(false);
+    }
+  },
+
+  saveSettings() {
+    S.key = $("setKey").value.trim();
+    S.model = $("setModel").value;
+    const h = $("setHost").value.trim();
+    if (h) S.host = h; else localStorage.removeItem("aura.host");
+    S.burstN = Math.min(10, Math.max(2, +$("setBurstN").value || 5));
+    S.burstMs = Math.min(3000, Math.max(200, +$("setBurstMs").value || 700));
+    toast("Settings saved");
+    this.startStream();
+    this.pollHealth(true);
+  },
+
+  /* ── Connection / pad ── */
+  async pollHealth(manual) {
+    try {
+      const r = await fetch(dev() + "/health", { signal: AbortSignal.timeout(3000) });
+      const h = await r.json();
+      $("connDot").classList.add("ok");
+      $("connText").textContent = h.ssid ? `${h.ssid} ${h.rssi}dBm` : "online";
+      $("devInfo").textContent = `IP ${h.ip} · ${h.ssid} (${h.rssi} dBm) · heap ${(h.heap / 1024) | 0}k · psram ${(h.psram / 1048576).toFixed(1)}M`;
+      if (manual) toast("Device online");
+    } catch {
+      $("connDot").classList.remove("ok");
+      $("connText").textContent = "offline";
+      if (manual) toast("Device unreachable at " + S.host);
+    }
+  },
+  async pollPad() {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const r = await fetch(dev() + "/pad", { signal: AbortSignal.timeout(1500) });
+      const p = await r.json();
+      $("padD5").classList.toggle("on", !!p.d5);
+      $("padD6").classList.toggle("on", !!p.d6);
+      if (p.d5 && !this._padPrev.d5) this.capture();
+      if (p.d6 && !this._padPrev.d6) this.toggleRecord();
+      this._padPrev = p;
+    } catch { /* offline — health chip already shows it */ }
+  },
+
+  /* ── Continuous recorder ── */
+  _recStatus: null,
+  async pollRec() {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const st = await (await fetch(dev() + "/rec/status", { signal: AbortSignal.timeout(2500) })).json();
+      this._recStatus = st;
+      $("contBtn").textContent = st.continuous ? "⏹ Stop" : "⏺ Start";
+      $("contBtn").classList.toggle("rec", st.continuous);
+      let info = st.sd ? `SD ${(st.sd_free_mb / 1024).toFixed(1)} GB free` : "no SD card";
+      if (st.continuous) info = `${st.file.split("/").pop()} · ${st.sec.toFixed(0)}s/${st.seg_sec}s · ` + info;
+      if (st.dropped > 0) info += ` · ⚠ dropped ${(st.dropped / 32000).toFixed(1)}s`;
+      $("contInfo").textContent = info;
+    } catch {
+      $("contInfo").textContent = "device offline";
+    }
+  },
+  async toggleContinuous() {
+    try {
+      const on = this._recStatus?.continuous;
+      const r = await fetch(dev() + (on ? "/rec/stop" : "/rec/start"));
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+      toast(on ? "Continuous logging stopped" : "⏺ Continuous logging started");
+      this.pollRec();
+    } catch (e) {
+      toast(e.message, 4000);
+    }
+  },
+
+  /* ── Device config ── */
+  async loadDeviceConfig() {
+    try {
+      const c = await (await fetch(dev() + "/config", { signal: AbortSignal.timeout(3000) })).json();
+      // Resolution values come from the device — the enum shifts between core builds.
+      const sel = $("setFsize");
+      sel.innerHTML = "";
+      for (const [label, val] of c.sizes || []) {
+        const o = document.createElement("option");
+        o.value = String(val);
+        o.textContent = label;
+        sel.appendChild(o);
+      }
+      sel.value = String(c.framesize);
+      $("setJpegQ").value = c.quality;
+      $("setCapInt").value = c.cap_interval;
+      $("setSegSec").value = c.seg_sec;
+      $("setRecAuto").checked = !!c.rec_auto;
+    } catch { /* offline — fields keep defaults */ }
+  },
+  async saveDeviceConfig() {
+    try {
+      const fs = $("setFsize").value;
+      const q = (fs ? `framesize=${fs}&` : "") + `quality=${+$("setJpegQ").value || 10}` +
+        `&cap_interval=${+$("setCapInt").value || 0}&seg_sec=${+$("setSegSec").value || 60}` +
+        `&rec_auto=${$("setRecAuto").checked ? 1 : 0}&gmt_off=${-new Date().getTimezoneOffset()}`;
+      const r = await fetch(dev() + "/config?" + q);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      toast("Saved to device");
+    } catch (e) {
+      toast("Device config failed — " + e.message, 4000);
+    }
+  },
+  saveAutoProc() {
+    localStorage.setItem("aura.autoProc", $("autoProc").checked ? "1" : "0");
+  },
+
+  /* ── Journal ── */
+  _processing: false,
+  async processNew(silent) {
+    if (this._processing) return;
+    this._processing = true;
+    try {
+      if (!S.key) { if (!silent) { toast("Set your Gemini API key first"); this.showView("settings"); } return; }
+      const st = await (await fetch(dev() + "/rec/status")).json();
+      const cur = st.file ? st.file.split("/").pop() : "";
+      const files = await (await fetch(dev() + "/sd/list?dir=/rec")).json();
+      if (files.error) throw new Error(files.error);
+      const done = getProcessed();
+      const todo = files
+        .filter((f) => f.name.endsWith(".wav") && f.name !== cur && !done[f.name])
+        .sort((a, b) => (a.name < b.name ? -1 : 1));
+      if (!todo.length) { if (!silent) toast("Nothing new to process"); return; }
+      let added = "";
+      for (const f of todo) {
+        if (f.size < 44 + 16000) { markProcessed(f.name); continue; }  // <0.5 s — skip
+        const blob = await (await fetch(`${dev()}/sd/file?path=${encodeURIComponent("/rec/" + f.name)}`)).blob();
+        const text = await AI.run([await AI.audioPart(blob), { text: PROMPTS.segment }], `Transcribing ${fnameTime(f.name)}…`);
+        markProcessed(f.name);
+        if (!/^\(no speech\)/i.test(text.trim())) {
+          const entry = `## ${fnameTime(f.name)} — ${f.name}\n${text}\n\n`;
+          added += entry;
+          await sdWrite(transcriptsPath(), "a", entry);
+        }
+      }
+      if (added) {
+        const prev = await sdRead(summaryPath());
+        const sum = await AI.run([{ text: PROMPTS.summary(prev, added) }], "Updating journal…");
+        await sdWrite(summaryPath(), "w", sum + "\n");
+        this.renderSummary(sum);
+        toast("📔 Journal updated");
+      } else if (!silent) {
+        toast("No speech found in new recordings");
+      }
+      this.renderRecList();
+    } catch (e) {
+      if (!silent) toast(e.message, 4000);
+    } finally {
+      this._processing = false;
+    }
+  },
+  /* ── Speak the summary through the glasses ── */
+  async speakSummary() {
+    let text = "";
+    try { text = await sdRead(summaryPath()); } catch {}
+    if (!text.trim()) { toast("No summary yet — Process new first"); return; }
+    // Strip markdown decoration for cleaner speech
+    const speech = text.replace(/[#*_`>-]/g, "").replace(/\n+/g, ". ").slice(0, 4000);
+    try {
+      busy(true, "Generating speech…");
+      const model = await this._findTtsModel();
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": S.key },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: "Read this daily journal summary aloud in a natural, friendly voice: " + speech }] }],
+          generationConfig: { responseModalities: ["AUDIO"] },
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error?.message || "HTTP " + r.status);
+      const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
+      if (!part) throw new Error("no audio returned");
+      const rate = +(part.inlineData.mimeType.match(/rate=(\d+)/)?.[1] || 24000);
+      const pcm = Uint8Array.from(atob(part.inlineData.data), (c) => c.charCodeAt(0));
+      busy(true, "Playing on glasses…");
+      const sr = await fetch(dev() + "/speak?vol=85", { method: "POST", body: pcmToWav(pcm, rate) });
+      if (!sr.ok) throw new Error("device speaker: HTTP " + sr.status);
+      toast("🔊 Spoken on glasses");
+    } catch (e) {
+      // Fallback: the phone speaks it (TTS API may not be on the free tier)
+      speechSynthesis.cancel();
+      speechSynthesis.speak(new SpeechSynthesisUtterance(speech));
+      toast("Spoke on phone instead (" + e.message + ")", 4000);
+    } finally {
+      busy(false);
+    }
+  },
+  async _findTtsModel() {
+    const cached = localStorage.getItem("aura.ttsModel");
+    if (cached) return cached;
+    const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
+      headers: { "x-goog-api-key": S.key },
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error?.message || "HTTP " + r.status);
+    const tts = (data.models || [])
+      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent") && /tts/.test(m.name))
+      .map((m) => m.name.replace("models/", ""))
+      .sort((a, b) => (/flash/.test(b) ? 1 : 0) - (/flash/.test(a) ? 1 : 0));
+    if (!tts.length) throw new Error("no TTS model on this key");
+    localStorage.setItem("aura.ttsModel", tts[0]);
+    return tts[0];
+  },
+
+  renderSummary(text) {
+    const box = $("summaryBox");
+    box.style.display = text ? "block" : "none";
+    box.innerHTML = `<span class="task">Today's summary</span>${esc(text)}`;
+  },
+  async renderSummaryFromSd() {
+    try { this.renderSummary(await sdRead(summaryPath())); } catch { /* offline */ }
+  },
+  async renderRecList() {
+    try {
+      const files = await (await fetch(dev() + "/sd/list?dir=/rec")).json();
+      if (files.error) { $("recList").innerHTML = `<div class="gmeta">${esc(files.error)}</div>`; return; }
+      const done = getProcessed();
+      const rows = files
+        .filter((f) => f.name.endsWith(".wav"))
+        .sort((a, b) => (a.name < b.name ? 1 : -1))
+        .slice(0, 25)
+        .map((f) => {
+          const url = `${dev()}/sd/file?path=${encodeURIComponent("/rec/" + f.name)}`;
+          return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line)">
+            <span style="flex:1">${f.name.startsWith("clip") ? "🎬" : "🎙"} ${fnameTime(f.name)} · ${wavSec(f.size).toFixed(0)}s ${done[f.name] ? "· ✅" : ""}</span>
+            <button class="btn small ghost" onclick="new Audio('${url}').play()">▶</button>
+            <button class="btn small ghost" onclick="App.delSd('/rec/${f.name}')">🗑</button>
+          </div>`;
+        });
+      $("recList").innerHTML = rows.join("") || `<div class="gmeta">none yet</div>`;
+    } catch {
+      $("recList").innerHTML = `<div class="gmeta">device offline</div>`;
+    }
+  },
+  async delSd(path) {
+    try {
+      await fetch(`${dev()}/sd/delete?path=${encodeURIComponent(path)}`);
+      this.renderRecList();
+    } catch (e) {
+      toast(e.message);
+    }
+  },
+
+  /* ── Live / capture ── */
+  startStream() {
+    this.streaming = true;
+    $("liveImg").src = devStream() + "/stream?t=" + Date.now();
+    $("liveOff").style.display = "none";
+    $("streamBtn").textContent = "⏸ Pause stream";
+  },
+  stopStream() {
+    this.streaming = false;
+    $("liveImg").src = "";
+    $("liveOff").style.display = "flex";
+    $("streamBtn").textContent = "▶️ Start stream";
+  },
+  toggleStream() { this.streaming ? this.stopStream() : this.startStream(); },
+
+  async snap() {
+    const r = await fetch(dev() + "/capture?t=" + Date.now(), { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error("capture failed: HTTP " + r.status);
+    return r.blob();
+  },
+  async capture() {
+    try {
+      busy(true, "Capturing…");
+      const blob = await this.snap();
+      const item = { id: uid(), kind: "image", blobs: [blob], ts: Date.now(), ai: [] };
+      await DB.put(item);
+      toast("📷 Saved to gallery");
+    } catch (e) {
+      toast("Capture failed — " + e.message);
+    } finally {
+      busy(false);
+    }
+  },
+  async burst() {
+    const n = S.burstN, ms = S.burstMs;
+    try {
+      const blobs = [];
+      for (let i = 0; i < n; i++) {
+        busy(true, `Burst ${i + 1}/${n}…`);
+        blobs.push(await this.snap());
+        if (i < n - 1) await new Promise((ok) => setTimeout(ok, ms));
+      }
+      await DB.put({ id: uid(), kind: "burst", blobs, ts: Date.now(), ai: [] });
+      toast(`🎞 Burst of ${n} saved`);
+    } catch (e) {
+      toast("Burst failed — " + e.message);
+    } finally {
+      busy(false);
+    }
+  },
+  async analyzeNow() {
+    try {
+      busy(true, "Capturing…");
+      const blob = await this.snap();
+      const item = { id: uid(), kind: "image", blobs: [blob], ts: Date.now(), ai: [] };
+      await DB.put(item);
+      await this.runAI(item, "describe");
+      this.showView("gallery");
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      busy(false);
+    }
+  },
+
+  /* ── Audio ── */
+  async toggleRecord() {
+    if (this.recording) return this.stopRecord();
+    try {
+      const r = await fetch(dev() + "/audio/start");
+      if (r.status === 409) { toast("Already recording"); return; }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      this.recording = true;
+      $("recBtn").textContent = "⏹ Stop recording";
+      $("recBtn").classList.add("rec");
+      this.showView("audio");
+      this._recPoll = setInterval(async () => {
+        try {
+          const st = await (await fetch(dev() + "/audio/status")).json();
+          $("recTime").textContent = st.sec.toFixed(1) + "s";
+          $("recBar").style.width = (st.sec / st.max_sec) * 100 + "%";
+          if (!st.recording) this.stopRecord();  // hit max duration
+        } catch { /* transient */ }
+      }, 400);
+    } catch (e) {
+      toast("Record failed — " + e.message);
+    }
+  },
+  async stopRecord() {
+    if (!this.recording) return;
+    this.recording = false;
+    clearInterval(this._recPoll);
+    $("recBtn").textContent = "🎙 Record clip";
+    $("recBtn").classList.remove("rec");
+    try {
+      busy(true, "Fetching audio…");
+      const r = await fetch(dev() + "/audio/stop");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const blob = await r.blob();
+      this._lastRecBlob = blob;
+      const item = { id: uid(), kind: "audio", blobs: [blob], ts: Date.now(), ai: [] };
+      await DB.put(item);
+      this._lastRecId = item.id;
+      $("lastRecCard").style.display = "block";
+      $("lastRecAudio").src = URL.createObjectURL(blob);
+      $("lastRecResult").innerHTML = "";
+      $("recTime").textContent = "0.0s";
+      $("recBar").style.width = "0%";
+      toast("🎙 Recording saved");
+    } catch (e) {
+      toast("Audio fetch failed — " + e.message);
+    } finally {
+      busy(false);
+    }
+  },
+  async transcribeLast() {
+    if (!this._lastRecBlob) return;
+    try {
+      const text = await AI.run([await AI.audioPart(this._lastRecBlob), { text: PROMPTS.transcribe }], "Transcribing…");
+      $("lastRecResult").innerHTML = `<div class="airesult"><span class="task">Transcript</span>${esc(text)}</div>`;
+      const items = await DB.all();
+      const item = items.find((i) => i.id === this._lastRecId);
+      if (item) { item.ai.push({ task: "Transcript", text, ts: Date.now() }); await DB.put(item); }
+    } catch (e) {
+      toast(e.message);
+    }
+  },
+
+  /* ── AI on gallery items ── */
+  async runAI(item, task, customPrompt) {
+    try {
+      let parts, label;
+      if (task === "ocr") {
+        parts = [await AI.imagePart(item.blobs[0]), { text: PROMPTS.ocr }];
+        label = "Reading text…";
+      } else if (task === "describe") {
+        parts = [await AI.imagePart(item.blobs[0]), { text: PROMPTS.describe }];
+        label = "Describing…";
+      } else if (task === "transcribe") {
+        parts = [await AI.audioPart(item.blobs[0]), { text: PROMPTS.transcribe }];
+        label = "Transcribing…";
+      } else if (task === "burst") {
+        parts = [...(await Promise.all(item.blobs.map((b) => AI.imagePart(b)))), { text: PROMPTS.burst(item.blobs.length, S.burstMs) }];
+        label = "Analyzing burst…";
+      } else if (task === "ask") {
+        const media = item.kind === "audio" ? [await AI.audioPart(item.blobs[0])] : await Promise.all(item.blobs.map((b) => AI.imagePart(b)));
+        parts = [...media, { text: customPrompt }];
+        label = "Asking…";
+      }
+      const text = await AI.run(parts, label);
+      const names = { ocr: "Text (OCR)", describe: "Description", transcribe: "Transcript", burst: "Burst analysis", ask: "Q: " + customPrompt };
+      item.ai.push({ task: names[task], text, ts: Date.now() });
+      await DB.put(item);
+      this.renderGallery();
+      toast("✨ Done");
+    } catch (e) {
+      toast(e.message, 4000);
+    }
+  },
+  ask(id) {
+    this._askItemId = id;
+    $("askText").value = "";
+    $("askModal").classList.add("show");
+    $("askText").focus();
+  },
+  async askSubmit() {
+    const q = $("askText").value.trim();
+    if (!q) return;
+    $("askModal").classList.remove("show");
+    const items = await DB.all();
+    const item = items.find((i) => i.id === this._askItemId);
+    if (item) this.runAI(item, "ask", q);
+  },
+
+  /* ── Gallery rendering ── */
+  async renderGallery() {
+    const items = await DB.all();
+    $("galleryEmpty").style.display = items.length ? "none" : "block";
+    const list = $("galleryList");
+    list.innerHTML = "";
+    for (const it of items) {
+      const div = document.createElement("div");
+      div.className = "gitem";
+      let thumb;
+      if (it.kind === "audio") {
+        thumb = `<div class="gthumb audioTile">🎙</div>`;
+      } else {
+        thumb = `<img class="gthumb" src="${URL.createObjectURL(it.blobs[0])}" onclick="App.openFull('${it.id}')">`;
+      }
+      const kindLabel = it.kind === "burst" ? `burst · ${it.blobs.length} frames` : it.kind;
+      let actions = "";
+      if (it.kind === "image") {
+        actions = `<button class="btn small" onclick="App.aiById('${it.id}','ocr')">📝 OCR</button>
+                   <button class="btn small" onclick="App.aiById('${it.id}','describe')">✨ Describe</button>`;
+      } else if (it.kind === "burst") {
+        actions = `<button class="btn small" onclick="App.aiById('${it.id}','burst')">✨ Analyze</button>`;
+      } else {
+        actions = `<button class="btn small" onclick="App.aiById('${it.id}','transcribe')">📝 Transcribe</button>`;
+      }
+      actions += `<button class="btn small ghost" onclick="App.ask('${it.id}')">💬 Ask</button>
+                  <button class="btn small ghost" onclick="App.delItem('${it.id}')">🗑</button>`;
+      const audioEl = it.kind === "audio" ? `<audio controls preload="none" src="${URL.createObjectURL(it.blobs[0])}"></audio>` : "";
+      const results = it.ai.map((a) => `<div class="airesult"><span class="task">${esc(a.task)}</span>${esc(a.text)}</div>`).join("");
+      div.innerHTML = `${thumb}<div class="gbody"><div class="gmeta">${kindLabel} · ${fmtTime(it.ts)}</div>${audioEl}<div class="gactions">${actions}</div>${results}</div>`;
+      list.appendChild(div);
+    }
+  },
+  async aiById(id, task) {
+    const items = await DB.all();
+    const item = items.find((i) => i.id === id);
+    if (item) this.runAI(item, task);
+  },
+  async delItem(id) {
+    await DB.del(id);
+    this.renderGallery();
+  },
+  async clearGallery() {
+    await DB.clear();
+    this.renderGallery();
+    toast("Gallery cleared");
+  },
+  async openFull(id) {
+    const items = await DB.all();
+    const item = items.find((i) => i.id === id);
+    if (item) window.open(URL.createObjectURL(item.blobs[0]), "_blank");
+  },
+};
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+App.init();
+</script>
+</body>
+</html>
