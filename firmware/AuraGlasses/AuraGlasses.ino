@@ -20,6 +20,9 @@
 #include "sdcard.h"
 #include "audio.h"
 #include "speaker.h"
+#include "actions.h"
+#include "pads.h"
+#include "led.h"
 
 // Known networks, tried in order of availability/signal.
 struct KnownAp {
@@ -32,15 +35,6 @@ static const KnownAp KNOWN_APS[] = {
 };
 
 static const char *MDNS_NAME = "aura";  // → http://aura.local
-
-// Touch pads as digital inputs (INPUT_PULLUP: pressed pulls to GND)
-// XIAO ESP32-S3 D5 = GPIO5, D6 = GPIO6
-#define PAD_D5 5
-#define PAD_D6 6
-
-// Read by app_httpd.cpp for the /pad endpoint
-extern "C" int aura_read_pad_d5_raw() { return digitalRead(PAD_D5); }
-extern "C" int aura_read_pad_d6_raw() { return digitalRead(PAD_D6); }
 
 void startCameraServer();
 
@@ -59,6 +53,25 @@ static void config_load() {
   g_cfg.seg_sec = prefs.getUShort("seg_sec", 60);
   g_cfg.rec_auto = prefs.getBool("rec_auto", true);
   g_cfg.gmt_off_min = prefs.getShort("gmt_off", 330);  // Asia/Colombo
+
+  g_cfg.pad_act[SLOT_D5_TAP] = prefs.getUChar("pd5t", ACT_DESCRIBE);
+  g_cfg.pad_act[SLOT_D5_HOLD] = prefs.getUChar("pd5h", ACT_READ_TEXT);
+  g_cfg.pad_act[SLOT_D6_TAP] = prefs.getUChar("pd6t", ACT_CAPTURE);
+  g_cfg.pad_act[SLOT_D6_HOLD] = prefs.getUChar("pd6h", ACT_SAVE_VIDEO);
+  g_cfg.hold_ms = prefs.getUShort("hold_ms", 600);
+  g_cfg.vid_en = prefs.getBool("vid_en", false);
+  g_cfg.win_sec = prefs.getUShort("win_sec", 60);
+  g_cfg.assist_vol = prefs.getUChar("avol", 85);
+  prefs.getString("lang", g_cfg.lang, sizeof(g_cfg.lang));
+  if (!g_cfg.lang[0]) strlcpy(g_cfg.lang, "English", sizeof(g_cfg.lang));
+  prefs.getString("gmodel", g_cfg.gem_model, sizeof(g_cfg.gem_model));
+  if (!g_cfg.gem_model[0]) strlcpy(g_cfg.gem_model, "gemini-3.5-flash", sizeof(g_cfg.gem_model));
+  prefs.getString("tmodel", g_cfg.tts_model, sizeof(g_cfg.tts_model));
+
+  // PSRAM guard: the video ring and a 3-min window don't fit together.
+  if (g_cfg.vid_en && g_cfg.win_sec > 120) {
+    g_cfg.win_sec = 120;
+  }
 }
 
 void config_save() {
@@ -68,6 +81,18 @@ void config_save() {
   prefs.putUShort("seg_sec", g_cfg.seg_sec);
   prefs.putBool("rec_auto", g_cfg.rec_auto);
   prefs.putShort("gmt_off", g_cfg.gmt_off_min);
+
+  prefs.putUChar("pd5t", g_cfg.pad_act[SLOT_D5_TAP]);
+  prefs.putUChar("pd5h", g_cfg.pad_act[SLOT_D5_HOLD]);
+  prefs.putUChar("pd6t", g_cfg.pad_act[SLOT_D6_TAP]);
+  prefs.putUChar("pd6h", g_cfg.pad_act[SLOT_D6_HOLD]);
+  prefs.putUShort("hold_ms", g_cfg.hold_ms);
+  prefs.putBool("vid_en", g_cfg.vid_en);
+  prefs.putUShort("win_sec", g_cfg.win_sec);
+  prefs.putUChar("avol", g_cfg.assist_vol);
+  prefs.putString("lang", g_cfg.lang);
+  prefs.putString("gmodel", g_cfg.gem_model);
+  prefs.putString("tmodel", g_cfg.tts_model);
 }
 
 void config_apply_camera() {
@@ -133,12 +158,15 @@ static bool initCamera() {
   return true;
 }
 
-// ── Periodic photo logging ───────────────────────────────────────────────────
-static void save_periodic_photo() {
+// ── Photo capture to SD (periodic logging + ACT_CAPTURE pad action) ─────────
+bool capture_photo_to_sd(char *out_path, size_t out_len) {
+  if (!sd_ok()) {
+    return false;
+  }
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("[IMG] capture failed");
-    return;
+    return false;
   }
   char path[48];
   time_t now = time(NULL);
@@ -151,13 +179,19 @@ static void save_periodic_photo() {
   }
   sd_lock();
   File f = SD.open(path, FILE_WRITE);
+  bool ok = false;
   if (f) {
-    f.write(fb->buf, fb->len);
+    ok = f.write(fb->buf, fb->len) == fb->len;
     f.close();
   }
   sd_unlock();
+  size_t len = fb->len;
   esp_camera_fb_return(fb);
-  Serial.printf("[IMG] %s (%u B)\n", path, fb->len);
+  Serial.printf("[IMG] %s (%u B)%s\n", path, (unsigned)len, ok ? "" : " WRITE FAILED");
+  if (ok && out_path && out_len) {
+    strlcpy(out_path, path, out_len);
+  }
+  return ok;
 }
 
 // ── WiFi / time ──────────────────────────────────────────────────────────────
@@ -180,9 +214,6 @@ void setup() {
   delay(200);
   Serial.println("AURA Glasses");
 
-  pinMode(PAD_D5, INPUT_PULLUP);
-  pinMode(PAD_D6, INPUT_PULLUP);
-
   config_load();
 
   if (!initCamera()) {
@@ -196,6 +227,8 @@ void setup() {
     Serial.println("[SD] not available — logging disabled, RAM clips only");
   }
 
+  led_init();  // needs the SD mutex from sd_init()
+
   if (!audio_init()) {
     Serial.println("[MIC] init failed — audio endpoints will return errors");
   } else {
@@ -208,6 +241,11 @@ void setup() {
   } else {
     Serial.println("[SPK] init failed — /tone and /speak disabled");
   }
+
+  actions_init();
+  pads_init();
+  Serial.printf("[PAD] actions d5=[%u,%u] d6=[%u,%u] hold=%ums\n",
+                g_cfg.pad_act[0], g_cfg.pad_act[1], g_cfg.pad_act[2], g_cfg.pad_act[3], g_cfg.hold_ms);
 
   connectWiFi();
 
@@ -252,7 +290,7 @@ void loop() {
   static uint32_t lastShot = 0;
   if (g_cfg.cap_interval && sd_ok() && millis() - lastShot > g_cfg.cap_interval * 1000UL) {
     lastShot = millis();
-    save_periodic_photo();
+    capture_photo_to_sd(NULL, 0);
   }
 
   delay(100);

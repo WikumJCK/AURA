@@ -156,7 +156,8 @@
       <button class="btn ghost" onclick="App.toggleStream()" id="streamBtn">⏸ Pause stream</button>
       <button class="btn" onclick="App.analyzeNow()">✨ Analyze now</button>
     </div>
-    <p class="hint" style="margin-top:12px">Device buttons: D5 = capture, D6 = record audio</p>
+    <div id="assistCard" class="airesult" style="display:none"></div>
+    <p class="hint" style="margin-top:12px" id="padHint">Touch pads: configure actions in Settings</p>
   </section>
 
   <!-- RECORDER / JOURNAL -->
@@ -241,6 +242,21 @@
       <label style="display:flex;align-items:center;gap:8px;margin-top:14px">
         <input type="checkbox" id="setRecAuto" style="width:auto"> Start continuous logging on boot
       </label>
+      <div class="gmeta" style="margin-top:18px">Touch pad actions</div>
+      <label>Pad D5 — tap</label>
+      <select id="setPadD5Tap"></select>
+      <label>Pad D5 — hold</label>
+      <select id="setPadD5Hold"></select>
+      <label>Pad D6 — tap</label>
+      <select id="setPadD6Tap"></select>
+      <label>Pad D6 — hold</label>
+      <select id="setPadD6Hold"></select>
+      <label>Hold threshold (ms)</label>
+      <input type="number" id="setHoldMs" min="300" max="2000" step="50" value="600">
+      <label>Speaker volume for chirps &amp; speech (0-100)</label>
+      <input type="number" id="setAvol" min="0" max="100" value="85">
+      <label>Spoken language</label>
+      <input type="text" id="setLang" placeholder="English" value="English">
       <button class="btn full" style="margin-top:16px" onclick="App.saveDeviceConfig()">Save to device</button>
     </div>
     <div class="card">
@@ -487,7 +503,6 @@ const App = {
   _recPoll: null,
   _lastRecBlob: null,
   _askItemId: null,
-  _padPrev: { d5: 0, d6: 0 },
 
   init() {
     $("setKey").value = S.key;
@@ -511,6 +526,7 @@ const App = {
     setInterval(() => this.pollHealth(), 5000);
     setInterval(() => this.pollPad(), 1000);
     setInterval(() => this.pollRec(), 3000);
+    setInterval(() => this.pollEvents(), 4000);
     setInterval(() => {
       if ($("autoProc").checked && S.key && document.visibilityState === "visible") this.processNew(true);
     }, 180000);
@@ -596,16 +612,50 @@ const App = {
     }
   },
   async pollPad() {
+    // Indicator dots only — the firmware executes pad actions itself now.
     if (document.visibilityState !== "visible") return;
     try {
       const r = await fetch(dev() + "/pad", { signal: AbortSignal.timeout(1500) });
       const p = await r.json();
       $("padD5").classList.toggle("on", !!p.d5);
       $("padD6").classList.toggle("on", !!p.d6);
-      if (p.d5 && !this._padPrev.d5) this.capture();
-      if (p.d6 && !this._padPrev.d6) this.toggleRecord();
-      this._padPrev = p;
     } catch { /* offline — health chip already shows it */ }
+  },
+
+  /* ── Device events (pad actions, assist results) ── */
+  _lastEventId: 0,
+  _eventsPrimed: false,
+  async pollEvents() {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const evs = await (await fetch(dev() + "/events", { signal: AbortSignal.timeout(2500) })).json();
+      if (!Array.isArray(evs)) return;
+      if (!this._eventsPrimed) {  // don't replay history on app open
+        this._eventsPrimed = true;
+        this._lastEventId = evs[0]?.id || 0;
+        const last = evs.find((e) => e.type === "describe" || e.type === "read_text");
+        if (last?.ok) this.renderAssist(last);
+        return;
+      }
+      const fresh = evs.filter((e) => e.id > this._lastEventId).reverse();  // oldest first
+      if (fresh.length) this._lastEventId = evs[0].id;
+      for (const e of fresh) {
+        if ((e.type === "describe" || e.type === "read_text") && e.ok) {
+          this.renderAssist(e);
+          toast("✨ " + e.detail.slice(0, 120), 5000);
+        } else {
+          toast(`${e.ok ? "✅" : "⚠️"} ${e.type}: ${e.detail.slice(0, 90)}`, 3500);
+        }
+        if (e.type === "capture" && e.ok) this.renderGallery();
+      }
+    } catch { /* offline */ }
+  },
+  renderAssist(e) {
+    const box = $("assistCard");
+    box.style.display = "block";
+    box.innerHTML = `<span class="task">${e.type === "read_text" ? "Text read aloud" : "Scene described"}${
+      e.ts ? " · " + new Date(e.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""
+    }</span>${esc(e.detail)}`;
   },
 
   /* ── Continuous recorder ── */
@@ -639,33 +689,53 @@ const App = {
   },
 
   /* ── Device config ── */
+  _padSelIds: ["setPadD5Tap", "setPadD5Hold", "setPadD6Tap", "setPadD6Hold"],
   async loadDeviceConfig() {
     try {
       const c = await (await fetch(dev() + "/config", { signal: AbortSignal.timeout(3000) })).json();
-      // Resolution values come from the device — the enum shifts between core builds.
-      const sel = $("setFsize");
-      sel.innerHTML = "";
-      for (const [label, val] of c.sizes || []) {
-        const o = document.createElement("option");
-        o.value = String(val);
-        o.textContent = label;
-        sel.appendChild(o);
-      }
-      sel.value = String(c.framesize);
+      // Resolution/action values come from the device — numbers drift between builds.
+      const fillSel = (sel, pairs, val) => {
+        sel.innerHTML = "";
+        for (const [label, v] of pairs || []) {
+          const o = document.createElement("option");
+          o.value = String(v);
+          o.textContent = label;
+          sel.appendChild(o);
+        }
+        sel.value = String(val);
+      };
+      fillSel($("setFsize"), c.sizes, c.framesize);
+      const padVals = [c.pad_d5_tap, c.pad_d5_hold, c.pad_d6_tap, c.pad_d6_hold];
+      this._padSelIds.forEach((id, i) => fillSel($(id), c.actions, padVals[i]));
       $("setJpegQ").value = c.quality;
       $("setCapInt").value = c.cap_interval;
       $("setSegSec").value = c.seg_sec;
       $("setRecAuto").checked = !!c.rec_auto;
+      $("setHoldMs").value = c.hold_ms ?? 600;
+      $("setAvol").value = c.avol ?? 85;
+      $("setLang").value = c.lang || "English";
+      this.renderPadHint(c);
     } catch { /* offline — fields keep defaults */ }
+  },
+  renderPadHint(c) {
+    const name = (v) => (c.actions?.find(([, av]) => av === v) || ["?"])[0];
+    $("padHint").textContent =
+      `D5: tap = ${name(c.pad_d5_tap)}, hold = ${name(c.pad_d5_hold)} · D6: tap = ${name(c.pad_d6_tap)}, hold = ${name(c.pad_d6_hold)}`;
   },
   async saveDeviceConfig() {
     try {
       const fs = $("setFsize").value;
+      const pads = this._padSelIds.map((id) => $(id).value);
       const q = (fs ? `framesize=${fs}&` : "") + `quality=${+$("setJpegQ").value || 10}` +
         `&cap_interval=${+$("setCapInt").value || 0}&seg_sec=${+$("setSegSec").value || 60}` +
-        `&rec_auto=${$("setRecAuto").checked ? 1 : 0}&gmt_off=${-new Date().getTimezoneOffset()}`;
+        `&rec_auto=${$("setRecAuto").checked ? 1 : 0}&gmt_off=${-new Date().getTimezoneOffset()}` +
+        (pads[0] !== "" ? `&pad_d5_tap=${pads[0]}&pad_d5_hold=${pads[1]}&pad_d6_tap=${pads[2]}&pad_d6_hold=${pads[3]}` : "") +
+        `&hold_ms=${+$("setHoldMs").value || 600}&avol=${+$("setAvol").value || 85}` +
+        `&lang=${encodeURIComponent($("setLang").value.trim() || "English")}`;
       const r = await fetch(dev() + "/config?" + q);
       if (!r.ok) throw new Error("HTTP " + r.status);
+      const c = await r.json().catch(() => null);
+      if (c) this.renderPadHint(c);
       toast("Saved to device");
     } catch (e) {
       toast("Device config failed — " + e.message, 4000);

@@ -24,6 +24,7 @@
 #include "speaker.h"
 #include "sdcard.h"
 #include "config.h"
+#include "actions.h"
 
 #include <WiFi.h>
 #include <SD.h>
@@ -39,9 +40,9 @@ extern "C" {
 }
 
 static esp_err_t pad_status_handler(httpd_req_t *req) {
-  // Pads use INPUT_PULLUP: pressed pulls to GND, so pressed == raw 0.
-  int d5 = (aura_read_pad_d5_raw() == 0) ? 1 : 0;
-  int d6 = (aura_read_pad_d6_raw() == 0) ? 1 : 0;
+  // TTP223 touch sensors: output HIGH while touched.
+  int d5 = aura_read_pad_d5_raw() ? 1 : 0;
+  int d6 = aura_read_pad_d6_raw() ? 1 : 0;
 
   char resp[64];
   int n = snprintf(resp, sizeof(resp), "{\"d5\":%d,\"d6\":%d}\n", d5, d6);
@@ -55,14 +56,16 @@ static esp_err_t health_handler(httpd_req_t *req) {
   int n = snprintf(
     resp, sizeof(resp),
     "{\"ip\":\"%s\",\"ssid\":\"%s\",\"rssi\":%d,\"heap\":%u,\"psram\":%u,"
-    "\"recording\":%s,\"continuous\":%s,\"sd\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,\"spk\":%s}\n",
+    "\"recording\":%s,\"continuous\":%s,\"sd\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,\"spk\":%s,"
+    "\"assist_busy\":%s}\n",
     WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), WiFi.RSSI(),
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
     audio_clip_active() ? "true" : "false",
     audio_continuous_active() ? "true" : "false",
     sd_ok() ? "true" : "false", sd_free_mb(), sd_total_mb(),
-    speaker_busy() ? "true" : "false"
+    speaker_busy() ? "true" : "false",
+    action_busy() ? "true" : "false"
   );
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -82,7 +85,7 @@ static bool safe_path(const char *p) {
 }
 
 static bool query_val(httpd_req_t *req, const char *key, char *out, size_t out_len) {
-  char q[128];
+  char q[384];  // the app's saveDeviceConfig sends ~14 params in one request
   if (httpd_req_get_url_query_str(req, q, sizeof(q)) != ESP_OK) {
     return false;
   }
@@ -506,25 +509,102 @@ static esp_err_t config_handler(httpd_req_t *req) {
     g_cfg.gmt_off_min = constrain(atoi(v), -720, 840);
     changed = true;
   }
+  static const char *PAD_KEYS[4] = {"pad_d5_tap", "pad_d5_hold", "pad_d6_tap", "pad_d6_hold"};
+  for (int i = 0; i < 4; i++) {
+    if (query_val(req, PAD_KEYS[i], v, sizeof(v))) {
+      g_cfg.pad_act[i] = constrain(atoi(v), 0, (int)ACT__COUNT - 1);
+      changed = true;
+    }
+  }
+  if (query_val(req, "hold_ms", v, sizeof(v))) {
+    g_cfg.hold_ms = constrain(atoi(v), 300, 2000);
+    changed = true;
+  }
+  if (query_val(req, "vid_en", v, sizeof(v))) {
+    g_cfg.vid_en = atoi(v) != 0;
+    changed = true;
+  }
+  if (query_val(req, "win_sec", v, sizeof(v))) {
+    int w = atoi(v);
+    g_cfg.win_sec = (w <= 0) ? 0 : constrain(w, 30, 180);
+    changed = true;
+  }
+  if (query_val(req, "avol", v, sizeof(v))) {
+    g_cfg.assist_vol = constrain(atoi(v), 0, 100);
+    changed = true;
+  }
+  if (query_val(req, "lang", v, sizeof(v))) {
+    strlcpy(g_cfg.lang, v, sizeof(g_cfg.lang));
+    changed = true;
+  }
+  // PSRAM guard mirrored from boot: video ring + >2 min window don't coexist.
+  if (g_cfg.vid_en && g_cfg.win_sec > 120) {
+    g_cfg.win_sec = 120;
+  }
   if (changed) {
     config_save();
     config_apply_camera();
   }
-  // "sizes" carries the enum values of this core build — the app builds its
-  // resolution picker from it instead of hardcoding numbers that drift.
-  char resp[448];
+  // "sizes"/"actions" carry the numeric values of this build — the app
+  // builds its pickers from them instead of hardcoding numbers that drift.
+  static char resp[1024];
   int n = snprintf(
     resp, sizeof(resp),
     "{\"cap_interval\":%u,\"framesize\":%u,\"quality\":%u,\"seg_sec\":%u,\"rec_auto\":%s,\"gmt_off\":%d,"
+    "\"pad_d5_tap\":%u,\"pad_d5_hold\":%u,\"pad_d6_tap\":%u,\"pad_d6_hold\":%u,"
+    "\"hold_ms\":%u,\"vid_en\":%s,\"win_sec\":%u,\"avol\":%u,\"lang\":\"%s\",\"key_set\":false,"
     "\"sizes\":[[\"UXGA 1600\\u00d71200 (max)\",%d],[\"SXGA 1280\\u00d71024\",%d],[\"HD 1280\\u00d7720\",%d],"
-    "[\"XGA 1024\\u00d7768\",%d],[\"SVGA 800\\u00d7600\",%d],[\"VGA 640\\u00d7480\",%d]]}\n",
+    "[\"XGA 1024\\u00d7768\",%d],[\"SVGA 800\\u00d7600\",%d],[\"VGA 640\\u00d7480\",%d]],"
+    "\"actions\":[[\"None\",%d],[\"Describe scene (speak)\",%d],[\"Read text aloud\",%d],[\"Capture photo\",%d],"
+    "[\"Save last 10s video\",%d],[\"Save audio window\",%d],[\"Start\\/stop audio clip\",%d],[\"Speak status\",%d]]}\n",
     g_cfg.cap_interval, g_cfg.framesize, g_cfg.quality, g_cfg.seg_sec,
     g_cfg.rec_auto ? "true" : "false", g_cfg.gmt_off_min,
+    g_cfg.pad_act[0], g_cfg.pad_act[1], g_cfg.pad_act[2], g_cfg.pad_act[3],
+    g_cfg.hold_ms, g_cfg.vid_en ? "true" : "false", g_cfg.win_sec, g_cfg.assist_vol, g_cfg.lang,
     (int)FRAMESIZE_UXGA, (int)FRAMESIZE_SXGA, (int)FRAMESIZE_HD,
-    (int)FRAMESIZE_XGA, (int)FRAMESIZE_SVGA, (int)FRAMESIZE_VGA
+    (int)FRAMESIZE_XGA, (int)FRAMESIZE_SVGA, (int)FRAMESIZE_VGA,
+    (int)ACT_NONE, (int)ACT_DESCRIBE, (int)ACT_READ_TEXT, (int)ACT_CAPTURE,
+    (int)ACT_SAVE_VIDEO, (int)ACT_SAVE_AUDIO_WIN, (int)ACT_TOGGLE_CLIP, (int)ACT_SPEAK_STATUS
   );
   json_hdrs(req);
   return httpd_resp_send(req, resp, n);
+}
+
+// ── Actions / events endpoints ───────────────────────────────────────────────
+
+// GET /pad/sim?slot=d5_tap|d5_hold|d6_tap|d6_hold — fire a pad slot's
+// configured action through the exact same queue as a physical touch.
+static esp_err_t pad_sim_handler(httpd_req_t *req) {
+  char v[16];
+  json_hdrs(req);
+  if (!query_val(req, "slot", v, sizeof(v))) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_sendstr(req, "{\"error\":\"slot required\"}\n");
+  }
+  int slot = -1;
+  if (!strcmp(v, "d5_tap")) slot = SLOT_D5_TAP;
+  else if (!strcmp(v, "d5_hold")) slot = SLOT_D5_HOLD;
+  else if (!strcmp(v, "d6_tap")) slot = SLOT_D6_TAP;
+  else if (!strcmp(v, "d6_hold")) slot = SLOT_D6_HOLD;
+  if (slot < 0) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_sendstr(req, "{\"error\":\"unknown slot\"}\n");
+  }
+  if (!action_enqueue(g_cfg.pad_act[slot], SRC_HTTP)) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"error\":\"action queue full\"}\n");
+  }
+  httpd_resp_set_status(req, "202 Accepted");
+  char resp[64];
+  int n = snprintf(resp, sizeof(resp), "{\"queued\":true,\"action\":%u}\n", g_cfg.pad_act[slot]);
+  return httpd_resp_send(req, resp, n);
+}
+
+static esp_err_t events_handler(httpd_req_t *req) {
+  static char buf[3072];
+  int n = events_json(buf, sizeof(buf));
+  json_hdrs(req);
+  return httpd_resp_send(req, buf, n);
 }
 
 // ── Camera handlers (from CameraWebServer) ───────────────────────────────────
@@ -814,7 +894,7 @@ static esp_err_t icon_handler(httpd_req_t *req) {
 
 void startCameraServer() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.max_uri_handlers = 24;
+  config.max_uri_handlers = 32;
   config.stack_size = 8192;       // JSON + WAV handlers need headroom
   config.lru_purge_enable = true; // iOS Safari opens several sockets
 
@@ -838,6 +918,8 @@ void startCameraServer() {
   httpd_uri_t config_uri = {.uri = "/config", .method = HTTP_GET, .handler = config_handler, .user_ctx = NULL};
   httpd_uri_t tone_uri = {.uri = "/tone", .method = HTTP_GET, .handler = tone_handler, .user_ctx = NULL};
   httpd_uri_t speak_uri = {.uri = "/speak", .method = HTTP_POST, .handler = speak_handler, .user_ctx = NULL};
+  httpd_uri_t pad_sim_uri = {.uri = "/pad/sim", .method = HTTP_GET, .handler = pad_sim_handler, .user_ctx = NULL};
+  httpd_uri_t events_uri = {.uri = "/events", .method = HTTP_GET, .handler = events_handler, .user_ctx = NULL};
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
 
   log_i("Starting web server on port: '%d'", config.server_port);
@@ -862,6 +944,8 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &config_uri);
     httpd_register_uri_handler(camera_httpd, &tone_uri);
     httpd_register_uri_handler(camera_httpd, &speak_uri);
+    httpd_register_uri_handler(camera_httpd, &pad_sim_uri);
+    httpd_register_uri_handler(camera_httpd, &events_uri);
   }
 
   config.server_port += 1;
