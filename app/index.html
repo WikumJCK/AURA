@@ -239,6 +239,13 @@
         </select>
         <button class="btn small ghost" style="flex:0 0 auto" onclick="App.loadModels()">Load</button>
       </div>
+      <div class="gactions" style="margin-top:10px;align-items:center">
+        <button class="btn small" onclick="App.pushKeyToDevice()">📤 Send AI key to glasses</button>
+        <button class="btn small ghost" onclick="App.clearDeviceKey()">Clear</button>
+        <span class="gmeta" id="devKeyState">key on device: ?</span>
+      </div>
+      <p class="hint" style="text-align:left;margin-top:6px">With the key on the glasses, the touch pads can describe scenes /
+      read text aloud standalone — phone locked or absent.</p>
       <label>Device host <span style="color:var(--dim)">(auto when served from the glasses)</span></label>
       <input type="text" id="setHost" placeholder="aura.local or 172.20.10.x">
       <label>Burst frames / interval (ms)</label>
@@ -789,6 +796,7 @@ const App = {
       $("setHoldMs").value = c.hold_ms ?? 600;
       $("setAvol").value = c.avol ?? 85;
       $("setLang").value = c.lang || "English";
+      $("devKeyState").textContent = "key on device: " + (c.key_set ? "✅ yes" : "❌ no");
       this.renderPadHint(c);
     } catch { /* offline — fields keep defaults */ }
   },
@@ -819,6 +827,37 @@ const App = {
   },
   saveAutoProc() {
     localStorage.setItem("aura.autoProc", $("autoProc").checked ? "1" : "0");
+  },
+
+  /* ── Device-side AI key ── */
+  async pushKeyToDevice() {
+    const key = $("setKey").value.trim() || S.key;
+    if (!key) { toast("Enter your Gemini API key first"); return; }
+    try {
+      // Make sure a TTS model is known so the glasses can speak.
+      let tts = localStorage.getItem("aura.ttsModel") || "";
+      if (!tts) {
+        try { tts = await this._findTtsModel(); } catch { /* key may lack TTS */ }
+      }
+      const q = `gmodel=${encodeURIComponent($("setModel").value || S.model)}&tmodel=${encodeURIComponent(tts)}`;
+      const r = await fetch(`${dev()}/apikey?${q}`, { method: "POST", body: key });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.key_set) throw new Error(d.error || "HTTP " + r.status);
+      $("devKeyState").textContent = "key on device: ✅ yes";
+      toast(d.tts ? "🔑 Key on glasses — pads can now speak descriptions"
+                  : "🔑 Key sent, but no TTS model found for this key (descriptions will be silent)", 4500);
+    } catch (e) {
+      toast("Key push failed — " + e.message, 4000);
+    }
+  },
+  async clearDeviceKey() {
+    try {
+      await fetch(dev() + "/apikey", { method: "POST", body: "" });
+      $("devKeyState").textContent = "key on device: ❌ no";
+      toast("Key removed from glasses");
+    } catch (e) {
+      toast(e.message, 4000);
+    }
   },
 
   /* ── Journal ── */

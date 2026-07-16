@@ -25,6 +25,7 @@
 #include "led.h"
 #include "camctl.h"
 #include "video.h"
+#include "gemini.h"
 
 // Known networks, tried in order of availability/signal.
 struct KnownAp {
@@ -257,6 +258,10 @@ void setup() {
   if (g_cfg.vid_en) {
     Serial.println("[VID] rolling video buffer enabled");
   }
+
+  gemini_init();
+  Serial.printf("[AI] key %s, vision=%s tts=%s\n", gemini_key_set() ? "set" : "NOT SET",
+                g_cfg.gem_model, g_cfg.tts_model[0] ? g_cfg.tts_model : "(none)");
 
   actions_init();
   pads_init();

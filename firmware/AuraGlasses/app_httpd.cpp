@@ -27,6 +27,7 @@
 #include "actions.h"
 #include "camctl.h"
 #include "video.h"
+#include "gemini.h"
 
 #include <WiFi.h>
 #include <SD.h>
@@ -59,7 +60,7 @@ static esp_err_t health_handler(httpd_req_t *req) {
     resp, sizeof(resp),
     "{\"ip\":\"%s\",\"ssid\":\"%s\",\"rssi\":%d,\"heap\":%u,\"psram\":%u,"
     "\"recording\":%s,\"continuous\":%s,\"sd\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,\"spk\":%s,"
-    "\"assist_busy\":%s,\"video\":%s,\"video_rec\":%s}\n",
+    "\"assist_busy\":%s,\"video\":%s,\"video_rec\":%s,\"key_set\":%s}\n",
     WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), WiFi.RSSI(),
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -69,7 +70,8 @@ static esp_err_t health_handler(httpd_req_t *req) {
     speaker_busy() ? "true" : "false",
     action_busy() ? "true" : "false",
     video_enabled() ? "true" : "false",
-    video_recording() ? "true" : "false"
+    video_recording() ? "true" : "false",
+    gemini_key_set() ? "true" : "false"
   );
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -564,7 +566,7 @@ static esp_err_t config_handler(httpd_req_t *req) {
     resp, sizeof(resp),
     "{\"cap_interval\":%u,\"framesize\":%u,\"quality\":%u,\"seg_sec\":%u,\"rec_auto\":%s,\"gmt_off\":%d,"
     "\"pad_d5_tap\":%u,\"pad_d5_hold\":%u,\"pad_d6_tap\":%u,\"pad_d6_hold\":%u,"
-    "\"hold_ms\":%u,\"vid_en\":%s,\"win_sec\":%u,\"avol\":%u,\"lang\":\"%s\",\"key_set\":false,"
+    "\"hold_ms\":%u,\"vid_en\":%s,\"win_sec\":%u,\"avol\":%u,\"lang\":\"%s\",\"key_set\":%s,"
     "\"sizes\":[[\"UXGA 1600\\u00d71200 (max)\",%d],[\"SXGA 1280\\u00d71024\",%d],[\"HD 1280\\u00d7720\",%d],"
     "[\"XGA 1024\\u00d7768\",%d],[\"SVGA 800\\u00d7600\",%d],[\"VGA 640\\u00d7480\",%d]],"
     "\"actions\":[[\"None\",%d],[\"Describe scene (speak)\",%d],[\"Read text aloud\",%d],[\"Capture photo\",%d],"
@@ -573,6 +575,7 @@ static esp_err_t config_handler(httpd_req_t *req) {
     g_cfg.rec_auto ? "true" : "false", g_cfg.gmt_off_min,
     g_cfg.pad_act[0], g_cfg.pad_act[1], g_cfg.pad_act[2], g_cfg.pad_act[3],
     g_cfg.hold_ms, g_cfg.vid_en ? "true" : "false", g_cfg.win_sec, g_cfg.assist_vol, g_cfg.lang,
+    gemini_key_set() ? "true" : "false",
     (int)FRAMESIZE_UXGA, (int)FRAMESIZE_SXGA, (int)FRAMESIZE_HD,
     (int)FRAMESIZE_XGA, (int)FRAMESIZE_SVGA, (int)FRAMESIZE_VGA,
     (int)ACT_NONE, (int)ACT_DESCRIBE, (int)ACT_READ_TEXT, (int)ACT_CAPTURE,
@@ -613,10 +616,73 @@ static esp_err_t pad_sim_handler(httpd_req_t *req) {
 }
 
 static esp_err_t events_handler(httpd_req_t *req) {
-  static char buf[3072];
+  static char buf[7168];
   int n = events_json(buf, sizeof(buf));
   json_hdrs(req);
   return httpd_resp_send(req, buf, n);
+}
+
+// POST /apikey — body is the raw Gemini key ("" clears); optional
+// ?gmodel=&tmodel= set the vision/TTS model names. POST body keeps the
+// key out of query strings and logs; it is never echoed back.
+static esp_err_t apikey_handler(httpd_req_t *req) {
+  json_hdrs(req);
+  char v[64];
+  bool mchanged = false;
+  if (query_val(req, "gmodel", v, sizeof(v)) && v[0]) {
+    strlcpy(g_cfg.gem_model, v, sizeof(g_cfg.gem_model));
+    mchanged = true;
+  }
+  if (query_val(req, "tmodel", v, sizeof(v))) {  // empty allowed = clear
+    strlcpy(g_cfg.tts_model, v, sizeof(g_cfg.tts_model));
+    mchanged = true;
+  }
+  if (mchanged) {
+    config_save();
+  }
+  char key[80] = "";
+  int len = min((int)req->content_len, (int)sizeof(key) - 1);
+  int got = 0;
+  while (got < len) {
+    int n = httpd_req_recv(req, key + got, len - got);
+    if (n <= 0) break;
+    got += n;
+  }
+  key[got] = 0;
+  // Trim whitespace/newlines a copy-paste might carry.
+  while (got && (key[got - 1] == '\n' || key[got - 1] == '\r' || key[got - 1] == ' ')) {
+    key[--got] = 0;
+  }
+  gemini_set_key(key);
+  char resp[96];
+  int n = snprintf(resp, sizeof(resp), "{\"key_set\":%s,\"gmodel\":\"%s\",\"tts\":%s}\n",
+                   gemini_key_set() ? "true" : "false", g_cfg.gem_model,
+                   g_cfg.tts_model[0] ? "true" : "false");
+  return httpd_resp_send(req, resp, n);
+}
+
+// GET /assist?mode=describe|read|status — trigger the assist pipeline
+// remotely (same worker path as the pads); result lands in /events.
+static esp_err_t assist_handler(httpd_req_t *req) {
+  char v[16] = "describe";
+  query_val(req, "mode", v, sizeof(v));
+  json_hdrs(req);
+  uint8_t act;
+  if (!strcmp(v, "describe")) act = ACT_DESCRIBE;
+  else if (!strcmp(v, "read")) act = ACT_READ_TEXT;
+  else if (!strcmp(v, "status")) act = ACT_SPEAK_STATUS;
+  else {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_sendstr(req, "{\"error\":\"mode must be describe|read|status\"}\n");
+  }
+  if (!action_enqueue(act, SRC_HTTP)) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"error\":\"action queue full\"}\n");
+  }
+  httpd_resp_set_status(req, "202 Accepted");
+  char resp[64];
+  int n = snprintf(resp, sizeof(resp), "{\"queued\":true,\"busy\":%s}\n", action_busy() ? "true" : "false");
+  return httpd_resp_send(req, resp, n);
 }
 
 // ── Video endpoints ──────────────────────────────────────────────────────────
@@ -999,6 +1065,8 @@ void startCameraServer() {
   httpd_uri_t vid_stop_uri = {.uri = "/video/stop", .method = HTTP_GET, .handler = video_stop_handler, .user_ctx = NULL};
   httpd_uri_t vid_status_uri = {.uri = "/video/status", .method = HTTP_GET, .handler = video_status_handler, .user_ctx = NULL};
   httpd_uri_t vid_save_uri = {.uri = "/video/save", .method = HTTP_GET, .handler = video_save_handler, .user_ctx = NULL};
+  httpd_uri_t apikey_uri = {.uri = "/apikey", .method = HTTP_POST, .handler = apikey_handler, .user_ctx = NULL};
+  httpd_uri_t assist_uri = {.uri = "/assist", .method = HTTP_GET, .handler = assist_handler, .user_ctx = NULL};
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
 
   log_i("Starting web server on port: '%d'", config.server_port);
@@ -1030,6 +1098,8 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &vid_stop_uri);
     httpd_register_uri_handler(camera_httpd, &vid_status_uri);
     httpd_register_uri_handler(camera_httpd, &vid_save_uri);
+    httpd_register_uri_handler(camera_httpd, &apikey_uri);
+    httpd_register_uri_handler(camera_httpd, &assist_uri);
   }
 
   config.server_port += 1;

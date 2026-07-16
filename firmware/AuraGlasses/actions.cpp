@@ -11,6 +11,7 @@
 #include "sdcard.h"
 #include "led.h"
 #include "video.h"
+#include "gemini.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -18,7 +19,7 @@
 
 // ── Event ring ───────────────────────────────────────────────────────────────
 #define EV_COUNT 8
-#define EV_DETAIL 200
+#define EV_DETAIL 360  // fits a 2-3 sentence scene description
 
 struct AuraEvent {
   uint32_t id;        // monotonic, 0 = empty slot
@@ -204,11 +205,52 @@ static void do_save_audio_window() {
   }
 }
 
-// Placeholders — replaced by the Gemini (Phase 4) and video/window
-// (Phases 2-3) implementations.
-static void do_stub(const char *name) {
-  tone_error();
-  event_push(name, false, "feature not built into this firmware yet");
+static void do_assist(uint8_t mode) {
+  const char *name = (mode == ASSIST_READ_TEXT) ? "read_text" : "describe";
+  if (WiFi.status() != WL_CONNECTED) {
+    tone_no_wifi();
+    event_push(name, false, "no WiFi — assist needs the hotspot/network");
+    return;
+  }
+  led_set_assist(true);
+  static char result[420];
+  int r = gemini_assist(mode, result, sizeof(result));
+  led_set_assist(false);
+  if (r == 0) {
+    tone_error();
+    event_push(name, false, result);
+  } else {
+    if (r == 2) {
+      tone_error();  // described but could not speak — check the app
+    }
+    event_push(name, true, result);
+  }
+}
+
+static void do_speak_status() {
+  char text[240];
+  time_t now = time(NULL);
+  struct tm tm;
+  localtime_r(&now, &tm);
+  bool rec = audio_continuous_active() || audio_clip_active();
+  if (now > 1577836800) {
+    snprintf(text, sizeof(text),
+             "It is %d:%02d. WiFi %s, %d dBm. SD card %s, %u gigabytes free. Recording is %s.",
+             tm.tm_hour, tm.tm_min,
+             WiFi.status() == WL_CONNECTED ? WiFi.SSID().c_str() : "disconnected", WiFi.RSSI(),
+             sd_ok() ? "OK" : "missing", sd_free_mb() / 1024, rec ? "on" : "off");
+  } else {
+    snprintf(text, sizeof(text), "Clock not set. WiFi %s. SD card %s. Recording is %s.",
+             WiFi.status() == WL_CONNECTED ? "connected" : "disconnected",
+             sd_ok() ? "OK" : "missing", rec ? "on" : "off");
+  }
+  led_set_assist(true);
+  bool spoken = gemini_tts_speak(text);
+  led_set_assist(false);
+  if (!spoken) {
+    tone_error();
+  }
+  event_push("status", spoken, text);
 }
 
 static void worker_task(void *arg) {
@@ -221,9 +263,9 @@ static void worker_task(void *arg) {
     switch (m.act) {
       case ACT_CAPTURE:        do_capture(); break;
       case ACT_TOGGLE_CLIP:    do_toggle_clip(); break;
-      case ACT_DESCRIBE:       do_stub("describe"); break;
-      case ACT_READ_TEXT:      do_stub("read_text"); break;
-      case ACT_SPEAK_STATUS:   do_stub("status"); break;
+      case ACT_DESCRIBE:       do_assist(ASSIST_DESCRIBE); break;
+      case ACT_READ_TEXT:      do_assist(ASSIST_READ_TEXT); break;
+      case ACT_SPEAK_STATUS:   do_speak_status(); break;
       case ACT_SAVE_VIDEO:     do_save_video(); break;
       case ACT_SAVE_AUDIO_WIN: do_save_audio_window(); break;
       default: break;
