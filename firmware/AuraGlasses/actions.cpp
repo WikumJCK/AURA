@@ -10,6 +10,7 @@
 #include "speaker.h"
 #include "sdcard.h"
 #include "led.h"
+#include "video.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -169,6 +170,22 @@ static void do_toggle_clip() {
   }
 }
 
+static void do_save_video() {
+  if (!video_enabled()) {
+    tone_error();
+    event_push("video_save", false, "rolling video is off — enable it in Settings");
+    return;
+  }
+  char path[64] = "";
+  if (video_save_ring(path, sizeof(path))) {
+    tone_success();
+    event_push("video_save", true, path);
+  } else {
+    tone_error();
+    event_push("video_save", false, sd_ok() ? "no frames buffered yet" : "no SD card");
+  }
+}
+
 static void do_save_audio_window() {
   if (!audio_window_ready()) {
     tone_error();
@@ -207,7 +224,7 @@ static void worker_task(void *arg) {
       case ACT_DESCRIBE:       do_stub("describe"); break;
       case ACT_READ_TEXT:      do_stub("read_text"); break;
       case ACT_SPEAK_STATUS:   do_stub("status"); break;
-      case ACT_SAVE_VIDEO:     do_stub("video_save"); break;
+      case ACT_SAVE_VIDEO:     do_save_video(); break;
       case ACT_SAVE_AUDIO_WIN: do_save_audio_window(); break;
       default: break;
     }

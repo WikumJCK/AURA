@@ -1,5 +1,6 @@
 #include "led.h"
 #include "audio.h"
+#include "video.h"
 #include "sdcard.h"
 
 #include <Arduino.h>
@@ -40,7 +41,7 @@ static void led_task(void *arg) {
     uint32_t period = 0;
     if (s_assist) {
       period = 250;
-    } else if (audio_clip_active() || audio_continuous_active()) {
+    } else if (audio_clip_active() || audio_continuous_active() || video_recording()) {
       period = 1000;
     }
     if (period && millis() - last_blink >= period) {

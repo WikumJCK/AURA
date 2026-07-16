@@ -23,6 +23,8 @@
 #include "actions.h"
 #include "pads.h"
 #include "led.h"
+#include "camctl.h"
+#include "video.h"
 
 // Known networks, tried in order of availability/signal.
 struct KnownAp {
@@ -132,7 +134,9 @@ static bool initCamera() {
   config.pixel_format = PIXFORMAT_JPEG;
 
   if (psramFound()) {
-    config.frame_size = (framesize_t)g_cfg.framesize;
+    // Always allocate the frame buffers at UXGA so runtime framesize
+    // switching (photos vs VGA rolling video) can never overflow them.
+    config.frame_size = FRAMESIZE_UXGA;
     config.jpeg_quality = g_cfg.quality;
     config.fb_count = 2;
     config.fb_location = CAMERA_FB_IN_PSRAM;
@@ -155,6 +159,7 @@ static bool initCamera() {
     s->set_brightness(s, 0);
     s->set_saturation(s, 0);
   }
+  config_apply_camera();  // buffers are UXGA-sized; sensor runs at the configured size
   return true;
 }
 
@@ -163,8 +168,12 @@ bool capture_photo_to_sd(char *out_path, size_t out_len) {
   if (!sd_ok()) {
     return false;
   }
+  // Parks the rolling-video task and switches the sensor to the configured
+  // photo size if it is currently at video resolution.
+  camctl_photo_begin((framesize_t)g_cfg.framesize, g_cfg.quality);
   camera_fb_t *fb = esp_camera_fb_get();
   if (!fb) {
+    camctl_photo_end();
     Serial.println("[IMG] capture failed");
     return false;
   }
@@ -187,6 +196,7 @@ bool capture_photo_to_sd(char *out_path, size_t out_len) {
   sd_unlock();
   size_t len = fb->len;
   esp_camera_fb_return(fb);
+  camctl_photo_end();
   Serial.printf("[IMG] %s (%u B)%s\n", path, (unsigned)len, ok ? "" : " WRITE FAILED");
   if (ok && out_path && out_len) {
     strlcpy(out_path, path, out_len);
@@ -240,6 +250,12 @@ void setup() {
     Serial.println("[SPK] MAX98357A ready (I2S1: DIN=1 BCLK=2 LRC=3)");
   } else {
     Serial.println("[SPK] init failed — /tone and /speak disabled");
+  }
+
+  camctl_init();
+  video_init();
+  if (g_cfg.vid_en) {
+    Serial.println("[VID] rolling video buffer enabled");
   }
 
   actions_init();

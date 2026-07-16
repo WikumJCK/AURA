@@ -543,6 +543,7 @@ bool audio_window_save(char *out_path, size_t out_len) {
     ok = f.write(s_win + pos, n) == n;
     sd_unlock();
     written += n;
+    vTaskDelay(1);  // yield so IDLE0 feeds the task watchdog
   }
   sd_lock();
   f.close();

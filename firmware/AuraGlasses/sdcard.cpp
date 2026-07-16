@@ -11,8 +11,18 @@ static SemaphoreHandle_t s_mtx = NULL;
 
 bool sd_init() {
   s_mtx = xSemaphoreCreateMutex();
-  // XIAO ESP32-S3 default SPI pins: SCK=7, MISO=8, MOSI=9
-  if (!SD.begin(SD_CS)) {
+  // XIAO ESP32-S3 default SPI pins: SCK=7, MISO=8, MOSI=9.
+  // A few retries: after a crash mid-write the card can need a second
+  // CMD0 before it answers again.
+  bool ok = false;
+  for (int i = 0; i < 3 && !ok; i++) {
+    if (i) {
+      SD.end();
+      delay(250);
+    }
+    ok = SD.begin(SD_CS);
+  }
+  if (!ok) {
     log_e("sd: begin failed (no card / wiring)");
     return false;
   }
@@ -23,6 +33,7 @@ bool sd_init() {
   SD.mkdir("/rec");
   SD.mkdir("/img");
   SD.mkdir("/logs");
+  SD.mkdir("/video");
   s_ok = true;
   log_i("sd: %llu MB total", SD.totalBytes() / (1024ULL * 1024ULL));
   return true;

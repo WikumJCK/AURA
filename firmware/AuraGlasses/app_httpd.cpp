@@ -25,6 +25,8 @@
 #include "sdcard.h"
 #include "config.h"
 #include "actions.h"
+#include "camctl.h"
+#include "video.h"
 
 #include <WiFi.h>
 #include <SD.h>
@@ -57,7 +59,7 @@ static esp_err_t health_handler(httpd_req_t *req) {
     resp, sizeof(resp),
     "{\"ip\":\"%s\",\"ssid\":\"%s\",\"rssi\":%d,\"heap\":%u,\"psram\":%u,"
     "\"recording\":%s,\"continuous\":%s,\"sd\":%s,\"sd_free_mb\":%u,\"sd_total_mb\":%u,\"spk\":%s,"
-    "\"assist_busy\":%s}\n",
+    "\"assist_busy\":%s,\"video\":%s,\"video_rec\":%s}\n",
     WiFi.localIP().toString().c_str(), WiFi.SSID().c_str(), WiFi.RSSI(),
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
     (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -65,7 +67,9 @@ static esp_err_t health_handler(httpd_req_t *req) {
     audio_continuous_active() ? "true" : "false",
     sd_ok() ? "true" : "false", sd_free_mb(), sd_total_mb(),
     speaker_busy() ? "true" : "false",
-    action_busy() ? "true" : "false"
+    action_busy() ? "true" : "false",
+    video_enabled() ? "true" : "false",
+    video_recording() ? "true" : "false"
   );
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -194,6 +198,9 @@ static esp_err_t send_sd_file(httpd_req_t *req, const char *path) {
     httpd_resp_set_type(req, "audio/wav");
   } else if (ext && (!strcasecmp(ext, ".jpg") || !strcasecmp(ext, ".jpeg"))) {
     httpd_resp_set_type(req, "image/jpeg");
+  } else if (ext && !strcasecmp(ext, ".avi")) {
+    httpd_resp_set_type(req, "video/x-msvideo");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment");
   } else {
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
   }
@@ -545,6 +552,10 @@ static esp_err_t config_handler(httpd_req_t *req) {
   if (changed) {
     config_save();
     config_apply_camera();
+    if (g_cfg.vid_en != video_enabled() && !video_set_enabled(g_cfg.vid_en)) {
+      g_cfg.vid_en = false;  // PSRAM alloc failed
+      config_save();
+    }
   }
   // "sizes"/"actions" carry the numeric values of this build — the app
   // builds its pickers from them instead of hardcoding numbers that drift.
@@ -606,6 +617,60 @@ static esp_err_t events_handler(httpd_req_t *req) {
   int n = events_json(buf, sizeof(buf));
   json_hdrs(req);
   return httpd_resp_send(req, buf, n);
+}
+
+// ── Video endpoints ──────────────────────────────────────────────────────────
+
+static esp_err_t video_start_handler(httpd_req_t *req) {
+  json_hdrs(req);
+  if (!sd_ok()) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    return httpd_resp_sendstr(req, "{\"error\":\"SD card required\"}\n");
+  }
+  if (!video_record_start()) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"error\":\"already recording\"}\n");
+  }
+  httpd_resp_set_status(req, "202 Accepted");
+  char resp[64];
+  int n = snprintf(resp, sizeof(resp), "{\"recording\":true,\"max_sec\":%d}\n", VID_REC_MAX_SEC);
+  return httpd_resp_send(req, resp, n);
+}
+
+static esp_err_t video_stop_handler(httpd_req_t *req) {
+  json_hdrs(req);
+  char path[64] = "";
+  if (!video_record_stop(path, sizeof(path))) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"error\":\"not recording\"}\n");
+  }
+  char resp[112];
+  int n = snprintf(resp, sizeof(resp), "{\"file\":\"%s\"}\n", path);
+  return httpd_resp_send(req, resp, n);
+}
+
+static esp_err_t video_status_handler(httpd_req_t *req) {
+  char resp[224];
+  int n = video_status_json(resp, sizeof(resp));
+  json_hdrs(req);
+  return httpd_resp_send(req, resp, n);
+}
+
+// GET /video/save — dump the rolling buffer via the worker; result in /events.
+static esp_err_t video_save_handler(httpd_req_t *req) {
+  json_hdrs(req);
+  if (!video_enabled()) {
+    httpd_resp_set_status(req, "503 Service Unavailable");
+    return httpd_resp_sendstr(req, "{\"error\":\"rolling video disabled\"}\n");
+  }
+  if (!action_enqueue(ACT_SAVE_VIDEO, SRC_HTTP)) {
+    httpd_resp_set_status(req, "409 Conflict");
+    return httpd_resp_sendstr(req, "{\"error\":\"action queue full\"}\n");
+  }
+  httpd_resp_set_status(req, "202 Accepted");
+  char resp[64];
+  int n = snprintf(resp, sizeof(resp), "{\"queued\":true,\"held_sec\":%.1f}\n", (double)video_ring_sec());
+  return httpd_resp_send(req, resp, n);
 }
 
 // GET /audio/window/save — dump the rolling window through the worker
@@ -677,16 +742,12 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   camera_fb_t *fb = NULL;
   esp_err_t res = ESP_OK;
 
-#if defined(LED_GPIO_NUM)
-  enable_led(true);
-  vTaskDelay(150 / portTICK_PERIOD_MS);  // The LED needs to be turned on ~150ms before the call to esp_camera_fb_get()
-  fb = esp_camera_fb_get();              // or it won't be visible in the frame. A better way to do this is needed.
-  enable_led(false);
-#else
+  // Parks rolling video and moves the sensor to photo size if needed.
+  camctl_photo_begin((framesize_t)g_cfg.framesize, g_cfg.quality);
   fb = esp_camera_fb_get();
-#endif
 
   if (!fb) {
+    camctl_photo_end();
     log_e("Camera capture failed");
     httpd_resp_send_500(req);
     return ESP_FAIL;
@@ -708,6 +769,7 @@ static esp_err_t capture_handler(httpd_req_t *req) {
     httpd_resp_send_chunk(req, NULL, 0);
   }
   esp_camera_fb_return(fb);
+  camctl_photo_end();
   return res;
 }
 
@@ -727,10 +789,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_set_hdr(req, "X-Framerate", "60");
 
-#if defined(LED_GPIO_NUM)
-  isStreaming = true;
-  enable_led(true);
-#endif
+  camctl_stream_open();  // rolling video parks while the stream is live
 
   while (true) {
     fb = esp_camera_fb_get();
@@ -777,11 +836,7 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     }
   }
 
-#if defined(LED_GPIO_NUM)
-  isStreaming = false;
-  enable_led(false);
-#endif
-
+  camctl_stream_close();
   return res;
 }
 
@@ -940,6 +995,10 @@ void startCameraServer() {
   httpd_uri_t pad_sim_uri = {.uri = "/pad/sim", .method = HTTP_GET, .handler = pad_sim_handler, .user_ctx = NULL};
   httpd_uri_t events_uri = {.uri = "/events", .method = HTTP_GET, .handler = events_handler, .user_ctx = NULL};
   httpd_uri_t awin_save_uri = {.uri = "/audio/window/save", .method = HTTP_GET, .handler = audio_window_save_handler, .user_ctx = NULL};
+  httpd_uri_t vid_start_uri = {.uri = "/video/start", .method = HTTP_GET, .handler = video_start_handler, .user_ctx = NULL};
+  httpd_uri_t vid_stop_uri = {.uri = "/video/stop", .method = HTTP_GET, .handler = video_stop_handler, .user_ctx = NULL};
+  httpd_uri_t vid_status_uri = {.uri = "/video/status", .method = HTTP_GET, .handler = video_status_handler, .user_ctx = NULL};
+  httpd_uri_t vid_save_uri = {.uri = "/video/save", .method = HTTP_GET, .handler = video_save_handler, .user_ctx = NULL};
   httpd_uri_t stream_uri = {.uri = "/stream", .method = HTTP_GET, .handler = stream_handler, .user_ctx = NULL};
 
   log_i("Starting web server on port: '%d'", config.server_port);
@@ -967,6 +1026,10 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &pad_sim_uri);
     httpd_register_uri_handler(camera_httpd, &events_uri);
     httpd_register_uri_handler(camera_httpd, &awin_save_uri);
+    httpd_register_uri_handler(camera_httpd, &vid_start_uri);
+    httpd_register_uri_handler(camera_httpd, &vid_stop_uri);
+    httpd_register_uri_handler(camera_httpd, &vid_status_uri);
+    httpd_register_uri_handler(camera_httpd, &vid_save_uri);
   }
 
   config.server_port += 1;
